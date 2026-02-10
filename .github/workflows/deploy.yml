@@ -1,0 +1,195 @@
+# Deploy Workflow
+#
+# Provisions CloudStack infrastructure based on workflow inputs.
+#
+# Required GitHub Secrets:
+#   CLOUDSTACK_API_KEY    - CloudStack API key
+#   CLOUDSTACK_SECRET_KEY - CloudStack secret key
+
+name: Deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      zone:
+        description: "CloudStack zone"
+        type: choice
+        default: "ZP01"
+        options:
+          - ZP01
+          - ZP02
+      domain:
+        description: "Domain (optional, for future use)"
+        required: false
+        default: ""
+      web_plan:
+        description: "Web VM plan"
+        type: choice
+        default: "small"
+        options:
+          - micro
+          - small
+          - medium
+          - large
+          - xlarge
+          - 2xlarge
+          - 4xlarge
+      blob_disk_size_gb:
+        description: "Web blob disk size in GB"
+        required: false
+        default: "20"
+      workers_enabled:
+        description: "Enable worker VMs"
+        type: boolean
+        default: false
+      workers_replicas:
+        description: "Number of worker replicas"
+        required: false
+        default: "1"
+      workers_plan:
+        description: "Worker VM plan"
+        type: choice
+        default: "small"
+        options:
+          - micro
+          - small
+          - medium
+          - large
+          - xlarge
+          - 2xlarge
+          - 4xlarge
+      db_enabled:
+        description: "Enable database VM"
+        type: boolean
+        default: false
+      db_plan:
+        description: "Database VM plan"
+        type: choice
+        default: "medium"
+        options:
+          - micro
+          - small
+          - medium
+          - large
+          - xlarge
+          - 2xlarge
+          - 4xlarge
+      db_disk_size_gb:
+        description: "Database disk size in GB"
+        required: false
+        default: "20"
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    outputs:
+      web_ip: ${{ steps.outputs.outputs.web_ip }}
+      worker_ips: ${{ steps.outputs.outputs.worker_ips }}
+      db_ip: ${{ steps.outputs.outputs.db_ip }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Build configuration
+        env:
+          INPUT_ZONE: ${{ inputs.zone }}
+          INPUT_DOMAIN: ${{ inputs.domain }}
+          INPUT_WEB_PLAN: ${{ inputs.web_plan }}
+          INPUT_BLOB_DISK_SIZE_GB: ${{ inputs.blob_disk_size_gb }}
+          INPUT_WORKERS_ENABLED: ${{ inputs.workers_enabled }}
+          INPUT_WORKERS_REPLICAS: ${{ inputs.workers_replicas }}
+          INPUT_WORKERS_PLAN: ${{ inputs.workers_plan }}
+          INPUT_DB_ENABLED: ${{ inputs.db_enabled }}
+          INPUT_DB_PLAN: ${{ inputs.db_plan }}
+          INPUT_DB_DISK_SIZE_GB: ${{ inputs.db_disk_size_gb }}
+        run: |
+          python3 << 'PYEOF'
+          import json, os
+          config = {
+              "zone": os.environ.get("INPUT_ZONE") or "ZP01",
+              "domain": os.environ.get("INPUT_DOMAIN") or "",
+              "web_plan": os.environ.get("INPUT_WEB_PLAN") or "small",
+              "blob_disk_size_gb": int(os.environ.get("INPUT_BLOB_DISK_SIZE_GB") or "20"),
+              "workers_enabled": os.environ.get("INPUT_WORKERS_ENABLED") == "true",
+              "workers_replicas": int(os.environ.get("INPUT_WORKERS_REPLICAS") or "1"),
+              "workers_plan": os.environ.get("INPUT_WORKERS_PLAN") or "small",
+              "db_enabled": os.environ.get("INPUT_DB_ENABLED") == "true",
+              "db_plan": os.environ.get("INPUT_DB_PLAN") or "medium",
+              "db_disk_size_gb": int(os.environ.get("INPUT_DB_DISK_SIZE_GB") or "20"),
+          }
+          with open("/tmp/config.json", "w") as f:
+              json.dump(config, f, indent=2)
+          print("Configuration:")
+          for k, v in config.items():
+              print(f"  {k}: {v}")
+          PYEOF
+
+      - name: Extract SSH public key
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+        run: |
+          install -m 600 /dev/null /tmp/ssh_key
+          printf '%s\n' "$SSH_PRIVATE_KEY" > /tmp/ssh_key
+          ssh-keygen -y -f /tmp/ssh_key > /tmp/ssh_key.pub
+          echo "Public key extracted successfully."
+
+      - name: Install and configure CloudMonkey
+        env:
+          CLOUDSTACK_API_KEY: ${{ secrets.CLOUDSTACK_API_KEY }}
+          CLOUDSTACK_SECRET_KEY: ${{ secrets.CLOUDSTACK_SECRET_KEY }}
+        run: |
+          wget -q https://github.com/apache/cloudstack-cloudmonkey/releases/latest/download/cmk.linux.x86-64
+          chmod +x cmk.linux.x86-64
+          sudo mv cmk.linux.x86-64 /usr/local/bin/cmk
+          cmk set url "https://painel-cloud.locaweb.com.br/client/api"
+          cmk set apikey "$CLOUDSTACK_API_KEY"
+          cmk set secretkey "$CLOUDSTACK_SECRET_KEY"
+          cmk set output json
+          echo "Verifying CloudStack connectivity..."
+          cmk list zones filter=name
+          echo "CloudMonkey configured successfully."
+
+      - name: Provision infrastructure
+        run: |
+          python3 scripts/provision_infrastructure.py \
+            --repo-name "${{ github.event.repository.name }}" \
+            --unique-id "${{ github.repository_id }}" \
+            --config /tmp/config.json \
+            --public-key /tmp/ssh_key.pub \
+            | tee /tmp/provision-output.json
+
+      - name: Set outputs
+        id: outputs
+        run: |
+          python3 << 'PYEOF'
+          import json, os
+          d = json.load(open('/tmp/provision-output.json'))
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+              f.write(f"web_ip={d.get('web_ip', '')}\n")
+              f.write(f"worker_ips={json.dumps(d.get('worker_ips', []))}\n")
+              f.write(f"db_ip={d.get('db_ip', '')}\n")
+          PYEOF
+
+      - name: Upload provisioning output
+        uses: actions/upload-artifact@v4
+        with:
+          name: provision-output
+          path: /tmp/provision-output.json
+          retention-days: 90
+
+      - name: Print summary
+        run: |
+          python3 << 'PYEOF' >> $GITHUB_STEP_SUMMARY
+          import json
+          d = json.load(open('/tmp/provision-output.json'))
+          print('## Infrastructure Provisioning Complete')
+          print('')
+          print('| Resource | Public IP |')
+          print('|----------|-----------|')
+          print(f'| Web | {d.get("web_ip", "N/A")} |')
+          for i, ip in enumerate(d.get("worker_ips", []), 1):
+              print(f'| Worker {i} | {ip} |')
+          if d.get("db_ip"):
+              print(f'| Database | {d["db_ip"]} |')
+          PYEOF
