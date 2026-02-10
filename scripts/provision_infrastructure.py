@@ -240,8 +240,9 @@ def deploy_vm(name, offering_id, template_id, zone_id, net_id, keypair_name,
     return vm_id
 
 
-def create_disk(disk_name, disk_offering_id, zone_id, size_gb, vm_id, desc):
-    """Create and attach a data disk, or skip if it already exists."""
+def create_disk(disk_name, disk_offering_id, zone_id, size_gb, vm_id,
+                network_name, desc):
+    """Create, tag, and attach a data disk, or skip if it already exists."""
     vol = find_volume(disk_name)
     if vol:
         vol_id = vol["id"]
@@ -258,13 +259,19 @@ def create_disk(disk_name, disk_offering_id, zone_id, size_gb, vm_id, desc):
                     f"size={size_gb}")
         vol_id = data["volume"]["id"]
         print(f"  {desc}: created ({vol_id})")
+        cmk("create", "tags",
+            f"resourceids={vol_id}",
+            "resourcetype=Volume",
+            "tags[0].key=locaweb-ai-deploy-id",
+            f"tags[0].value={network_name}")
+        print(f"    Tagged with locaweb-ai-deploy-id={network_name}")
         cmk("attach", "volume", f"id={vol_id}",
             f"virtualmachineid={vm_id}")
         print(f"    Attached to VM")
     return vol_id
 
 
-def create_snapshot_policy(vol_id, desc):
+def create_snapshot_policy(vol_id, network_name, desc):
     """Create daily snapshot policy if one does not already exist."""
     existing = cmk_quiet("list", "snapshotpolicies", f"volumeid={vol_id}")
     if existing and existing.get("snapshotpolicy"):
@@ -275,7 +282,9 @@ def create_snapshot_policy(vol_id, desc):
             "intervaltype=daily",
             f"schedule={SNAPSHOT_SCHEDULE}",
             f"maxsnaps={SNAPSHOT_MAX}",
-            f"timezone={SNAPSHOT_TIMEZONE}")
+            f"timezone={SNAPSHOT_TIMEZONE}",
+            "tags[0].key=locaweb-ai-deploy-id",
+            f"tags[0].value={network_name}")
         print(f"  {desc}: daily snapshot policy created")
 
 
@@ -476,21 +485,22 @@ def provision(config, repo_name, unique_id, public_key):
     # --- Data Disks ---
     print("\nCreating data disks...")
     blob_vol_id = create_disk(blob_disk_name, disk_offering_id, zone_id,
-                              blob_disk_size_gb, web_vm_id, "Blob disk (web)")
+                              blob_disk_size_gb, web_vm_id,
+                              network_name, "Blob disk (web)")
     results["blob_volume_id"] = blob_vol_id
 
     if db_enabled:
         db_disk_name = f"{network_name}-dbdata"
         db_vol_id = create_disk(db_disk_name, disk_offering_id, zone_id,
                                 config["db_disk_size_gb"], db_vm_id,
-                                "DB disk (db)")
+                                network_name, "DB disk (db)")
         results["db_volume_id"] = db_vol_id
 
     # --- Snapshot Policies ---
     print("\nCreating snapshot policies...")
-    create_snapshot_policy(blob_vol_id, "Blob disk")
+    create_snapshot_policy(blob_vol_id, network_name, "Blob disk")
     if db_enabled:
-        create_snapshot_policy(db_vol_id, "DB disk")
+        create_snapshot_policy(db_vol_id, network_name, "DB disk")
 
     # --- Internal IPs ---
     print("\nRetrieving internal IPs...")

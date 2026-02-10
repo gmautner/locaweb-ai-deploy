@@ -69,7 +69,9 @@ def teardown(network_name):
 
     # 1. Delete snapshot policies for data volumes
     print("[1/8] Removing snapshot policies...")
-    data = cmk("list", "volumes", f"networkid={net_id}", "type=DATADISK",
+    data = cmk("list", "volumes", "type=DATADISK",
+               "tags[0].key=locaweb-ai-deploy-id",
+               f"tags[0].value={network_name}",
                "filter=id,name")
     volumes = data.get("volume", []) if data else []
     for vol in volumes:
