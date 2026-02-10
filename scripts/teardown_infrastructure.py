@@ -89,7 +89,7 @@ def teardown(network_name):
         policies = cmk("list", "snapshotpolicies", f"volumeid={vol['id']}")
         if policies and policies.get("snapshotpolicy"):
             for p in policies["snapshotpolicy"]:
-                cmk("delete", "snapshotpolicy", f"id={p['id']}")
+                cmk("delete", "snapshotpolicies", f"id={p['id']}")
                 print(f"  Deleted snapshot policy for {vol['name']}")
 
     # 2. Detach and delete data volumes
