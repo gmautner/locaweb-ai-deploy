@@ -1,0 +1,48 @@
+# Teardown Workflow
+#
+# Destroys all CloudStack infrastructure for this repository.
+# The network name is derived automatically from the repo name and ID.
+#
+# Required GitHub Secrets:
+#   CLOUDSTACK_API_KEY    - CloudStack API key
+#   CLOUDSTACK_SECRET_KEY - CloudStack secret key
+
+name: Teardown
+
+on:
+  workflow_dispatch:
+
+jobs:
+  teardown:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install and configure CloudMonkey
+        env:
+          CLOUDSTACK_API_KEY: ${{ secrets.CLOUDSTACK_API_KEY }}
+          CLOUDSTACK_SECRET_KEY: ${{ secrets.CLOUDSTACK_SECRET_KEY }}
+        run: |
+          wget -q https://github.com/apache/cloudstack-cloudmonkey/releases/latest/download/cmk.linux.x86-64
+          chmod +x cmk.linux.x86-64
+          sudo mv cmk.linux.x86-64 /usr/local/bin/cmk
+          cmk set url "https://painel-cloud.locaweb.com.br/client/api"
+          cmk set apikey "$CLOUDSTACK_API_KEY"
+          cmk set secretkey "$CLOUDSTACK_SECRET_KEY"
+          cmk set output json
+          echo "Verifying CloudStack connectivity..."
+          cmk list zones filter=name
+          echo "CloudMonkey configured successfully."
+
+      - name: Teardown infrastructure
+        run: |
+          python3 scripts/teardown_infrastructure.py \
+            --network-name "${{ github.event.repository.name }}-${{ github.repository_id }}"
+
+      - name: Print summary
+        run: |
+          echo "## Infrastructure Teardown Complete" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "All resources for **${{ github.event.repository.name }}-${{ github.repository_id }}** have been destroyed." >> $GITHUB_STEP_SUMMARY
