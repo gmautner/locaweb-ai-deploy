@@ -473,57 +473,73 @@ def provision(config, repo_name, unique_id, public_key):
     else:
         print(f"  Removed {removed} excess worker(s).")
 
-    # --- Public IPs ---
-    print("\nAcquiring public IPs...")
-    existing_ips = find_public_ips(net_id)
-    needed = total_ips - len(existing_ips)
-    if needed > 0:
-        for _ in range(needed):
-            data = cmk("associate", "ipaddress", f"networkid={net_id}")
-            existing_ips.append(data["ipaddress"])
-        print(f"  Acquired {needed} new IP(s)")
-    else:
-        print(f"  Already have enough IPs ({len(existing_ips)})")
+    # --- Public IPs & Static NAT ---
+    # Respect existing NAT mappings to avoid conflicts during scale-up.
+    # CloudStack prohibits a VM from having two static NAT IPs, so we
+    # must reuse existing assignments rather than blindly re-ordering.
+    print("\nAssigning public IPs...")
 
-    # Assign IPs in order: web, workers (1..N), db
-    idx = 0
-    web_ip = existing_ips[idx]; idx += 1
+    # Build ordered list of VMs needing IPs
+    vm_assignments = [("Web", web_vm_id)]
+    if workers_enabled:
+        for i, wid in enumerate(worker_vm_ids, 1):
+            vm_assignments.append((f"Worker {i}", wid))
+    if db_enabled:
+        vm_assignments.append(("DB", db_vm_id))
+
+    # Check existing static NAT assignments
+    ip_map = {}  # vm_id -> ip_obj
+    for label, vm_id in vm_assignments:
+        existing_ip = find_public_ip_for_vm(net_id, vm_id)
+        if existing_ip:
+            ip_map[vm_id] = existing_ip
+            print(f"  {label}: reusing {existing_ip['ipaddress']}")
+
+    # Find unassigned existing non-source-NAT IPs
+    all_existing = find_public_ips(net_id)
+    assigned_ip_ids = {ip["id"] for ip in ip_map.values()}
+    unassigned = [ip for ip in all_existing if ip["id"] not in assigned_ip_ids]
+
+    # Acquire additional IPs if needed
+    vms_needing_ips = [(l, vid) for l, vid in vm_assignments
+                       if vid not in ip_map]
+    new_needed = len(vms_needing_ips) - len(unassigned)
+    if new_needed > 0:
+        for _ in range(new_needed):
+            data = cmk("associate", "ipaddress", f"networkid={net_id}")
+            unassigned.append(data["ipaddress"])
+        print(f"  Acquired {new_needed} new IP(s)")
+
+    # Assign unassigned IPs to VMs that need them + enable static NAT
+    ui = 0
+    for label, vm_id in vms_needing_ips:
+        ip_obj = unassigned[ui]; ui += 1
+        ip_map[vm_id] = ip_obj
+        cmk("enable", "staticnat",
+            f"ipaddressid={ip_obj['id']}",
+            f"virtualmachineid={vm_id}")
+        print(f"  {label}: assigned {ip_obj['ipaddress']}")
+
+    # Build results from ip_map
+    web_ip = ip_map[web_vm_id]
     print(f"  Web IP: {web_ip['ipaddress']}")
     results["web_ip"] = web_ip["ipaddress"]
     results["web_ip_id"] = web_ip["id"]
 
     worker_ips = []
     if workers_enabled:
-        for i in range(config["workers_replicas"]):
-            wip = existing_ips[idx]; idx += 1
+        for i, wid in enumerate(worker_vm_ids, 1):
+            wip = ip_map[wid]
             worker_ips.append(wip)
-            print(f"  Worker {i+1} IP: {wip['ipaddress']}")
+            print(f"  Worker {i} IP: {wip['ipaddress']}")
         results["worker_ips"] = [ip["ipaddress"] for ip in worker_ips]
 
     db_ip = None
     if db_enabled:
-        db_ip = existing_ips[idx]; idx += 1
+        db_ip = ip_map[db_vm_id]
         print(f"  DB IP: {db_ip['ipaddress']}")
         results["db_ip"] = db_ip["ipaddress"]
         results["db_ip_id"] = db_ip["id"]
-
-    # --- Static NAT ---
-    print("\nEnabling static NAT...")
-    nat_assignments = [(web_ip, web_vm_id, "Web IP -> Web VM")]
-    if workers_enabled:
-        for i, (wip, wid) in enumerate(zip(worker_ips, worker_vm_ids), 1):
-            nat_assignments.append((wip, wid, f"Worker {i} IP -> Worker {i} VM"))
-    if db_enabled:
-        nat_assignments.append((db_ip, db_vm_id, "DB IP -> DB VM"))
-
-    for ip_obj, vm_id, desc in nat_assignments:
-        if is_static_nat_enabled(ip_obj["id"]):
-            print(f"  {desc}: already enabled")
-        else:
-            cmk("enable", "staticnat",
-                f"ipaddressid={ip_obj['id']}",
-                f"virtualmachineid={vm_id}")
-            print(f"  {desc}: enabled")
 
     # --- Firewall Rules ---
     print("\nCreating firewall rules...")
