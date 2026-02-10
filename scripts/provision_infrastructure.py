@@ -309,6 +309,35 @@ def create_snapshot_policy(vol_id, network_name, snapshot_zoneids, desc):
         print(f"  {desc}: daily snapshot policy created")
 
 
+def find_public_ip_for_vm(network_id, vm_id):
+    """Find the public IP with static NAT pointing to a specific VM."""
+    data = cmk_quiet("list", "publicipaddresses",
+                     f"associatednetworkid={network_id}",
+                     "filter=id,ipaddress,issourcenat,isstaticnat,virtualmachineid")
+    if data:
+        for ip in data.get("publicipaddress", []):
+            if ip.get("virtualmachineid") == vm_id:
+                return ip
+    return None
+
+
+def remove_vm_and_ip(vm_name, vm_id, net_id):
+    """Remove a VM and its associated public IP, firewall rules, and NAT."""
+    ip = find_public_ip_for_vm(net_id, vm_id)
+    if ip and not ip.get("issourcenat", False):
+        if ip.get("isstaticnat", False):
+            cmk("disable", "staticnat", f"ipaddressid={ip['id']}")
+            print(f"    Disabled static NAT on {ip['ipaddress']}")
+        rules = find_firewall_rules(ip["id"])
+        for r in rules:
+            cmk("delete", "firewallrule", f"id={r['id']}")
+            print(f"    Deleted FW rule on {ip['ipaddress']}")
+        cmk("disassociate", "ipaddress", f"id={ip['id']}")
+        print(f"    Released {ip['ipaddress']}")
+    cmk("destroy", "virtualmachine", f"id={vm_id}", "expunge=true")
+    print(f"    Destroyed {vm_name}")
+
+
 def get_vm_internal_ip(vm_id):
     """Get the internal/private IP of a VM."""
     data = cmk("list", "virtualmachines", f"id={vm_id}", "filter=id,nic")
@@ -424,6 +453,25 @@ def provision(config, repo_name, unique_id, public_key):
                              zone_id, net_id, keypair_name,
                              userdata_path=DB_USERDATA)
         results["db_vm_id"] = db_vm_id
+
+    # --- Scale down excess workers ---
+    desired_workers = config["workers_replicas"] if workers_enabled else 0
+    print("\nChecking for excess workers...")
+    excess_idx = desired_workers + 1
+    removed = 0
+    while True:
+        worker_name = f"{network_name}-worker-{excess_idx}"
+        vm_id = find_vm(worker_name)
+        if not vm_id:
+            break
+        print(f"  Removing: {worker_name}")
+        remove_vm_and_ip(worker_name, vm_id, net_id)
+        removed += 1
+        excess_idx += 1
+    if removed == 0:
+        print("  No excess workers found.")
+    else:
+        print(f"  Removed {removed} excess worker(s).")
 
     # --- Public IPs ---
     print("\nAcquiring public IPs...")
