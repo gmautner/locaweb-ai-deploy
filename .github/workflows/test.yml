@@ -9,7 +9,9 @@
 # Required GitHub Secrets:
 #   CLOUDSTACK_API_KEY    - CloudStack API key
 #   CLOUDSTACK_SECRET_KEY - CloudStack secret key
-#   SSH_PRIVATE_KEY       - SSH private key
+#
+# Note: generates a fresh SSH key pair per run to avoid CloudStack's
+# unique-public-key-per-account constraint with the production keypair.
 
 name: Test
 
@@ -33,14 +35,10 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Extract SSH public key
-        env:
-          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+      - name: Generate SSH key pair
         run: |
-          install -m 600 /dev/null /tmp/ssh_key
-          printf '%s\n' "$SSH_PRIVATE_KEY" > /tmp/ssh_key
-          ssh-keygen -y -f /tmp/ssh_key > /tmp/ssh_key.pub
-          echo "Public key extracted successfully."
+          ssh-keygen -t ed25519 -f /tmp/ssh_key -N "" -q
+          echo "SSH key pair generated for test run."
 
       - name: Install and configure CloudMonkey
         env:
