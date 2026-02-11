@@ -339,6 +339,7 @@ jobs:
                           'env': {
                               'clear': {
                                   'POSTGRES_DB': repo_name,
+                                  'PGDATA': '/var/lib/postgresql/data/pgdata',
                               },
                               'secret': [
                                   'POSTGRES_USER',
