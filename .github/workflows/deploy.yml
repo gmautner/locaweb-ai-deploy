@@ -9,6 +9,10 @@
 #   POSTGRES_USER         - PostgreSQL username (if db_enabled)
 #   POSTGRES_PASSWORD     - PostgreSQL password (if db_enabled)
 #
+# Optional KAMAL_-prefixed secrets/variables:
+#   Secrets with KAMAL_ prefix  → passed to the container as secret env vars (prefix stripped)
+#   Variables with KAMAL_ prefix → passed to the container as clear env vars (prefix stripped)
+#
 # Note: GITHUB_TOKEN is used for ghcr.io registry access (no separate REGISTRY_TOKEN needed).
 
 name: Deploy
@@ -235,14 +239,63 @@ jobs:
           cp /tmp/ssh_key .kamal/ssh_key
           chmod 600 .kamal/ssh_key
 
-      - name: Create Kamal secrets file
+      - name: Create Kamal secrets and process KAMAL_-prefixed entries
+        env:
+          ALL_SECRETS: ${{ toJSON(secrets) }}
+          ALL_VARS: ${{ toJSON(vars) }}
+          INPUT_DB_ENABLED: ${{ inputs.db_enabled }}
         run: |
-          cat > .kamal/secrets << 'EOF'
-          KAMAL_REGISTRY_PASSWORD=$KAMAL_REGISTRY_PASSWORD
-          POSTGRES_USER=$POSTGRES_USER
-          POSTGRES_PASSWORD=$POSTGRES_PASSWORD
-          DATABASE_URL=postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@$POSTGRES_HOST:5432/$POSTGRES_DB
-          EOF
+          python3 << 'PYEOF'
+          import json, os, shlex
+
+          secrets = json.loads(os.environ.get('ALL_SECRETS', '{}'))
+          variables = json.loads(os.environ.get('ALL_VARS', '{}'))
+          db_enabled = os.environ.get('INPUT_DB_ENABLED') == 'true'
+
+          # Collect KAMAL_-prefixed secrets (strip prefix for the target name)
+          custom_secrets = {}
+          for k, v in secrets.items():
+              if k.startswith('KAMAL_'):
+                  stripped = k[len('KAMAL_'):]
+                  custom_secrets[stripped] = v
+
+          # Collect KAMAL_-prefixed variables (strip prefix for the target name)
+          custom_vars = {}
+          for k, v in variables.items():
+              if k.startswith('KAMAL_'):
+                  stripped = k[len('KAMAL_'):]
+                  custom_vars[stripped] = v
+
+          # Build .kamal/secrets with $VAR references (no cleartext values)
+          lines = [
+              'KAMAL_REGISTRY_PASSWORD=$KAMAL_REGISTRY_PASSWORD',
+          ]
+          if db_enabled:
+              lines.append('POSTGRES_USER=$POSTGRES_USER')
+              lines.append('POSTGRES_PASSWORD=$POSTGRES_PASSWORD')
+              lines.append('DATABASE_URL=$DATABASE_URL')
+          for name in custom_secrets:
+              lines.append(f'{name}=${name}')
+          with open('.kamal/secrets', 'w') as f:
+              f.write('\n'.join(lines) + '\n')
+
+          # Write a sourceable env file with resolved custom secret values
+          # for the deploy step to export before running kamal
+          with open('/tmp/kamal_custom_secrets.env', 'w') as f:
+              for name, value in custom_secrets.items():
+                  f.write(f'export {name}={shlex.quote(value)}\n')
+
+          # Write custom vars and secret names for the config generation step
+          with open('/tmp/kamal_custom_vars.json', 'w') as f:
+              json.dump(custom_vars, f)
+          with open('/tmp/kamal_custom_secrets.json', 'w') as f:
+              json.dump(list(custom_secrets.keys()), f)
+
+          if custom_vars:
+              print(f'Custom clear env vars: {", ".join(custom_vars.keys())}')
+          if custom_secrets:
+              print(f'Custom secret env vars: {", ".join(custom_secrets.keys())}')
+          PYEOF
 
       - name: Generate Kamal deploy config
         env:
@@ -352,6 +405,15 @@ jobs:
                   },
               }
 
+          # Merge KAMAL_-prefixed custom variables and secrets
+          custom_vars = json.load(open('/tmp/kamal_custom_vars.json'))
+          custom_secrets = json.load(open('/tmp/kamal_custom_secrets.json'))
+          for k, v in custom_vars.items():
+              config['env']['clear'][k] = v
+          if custom_secrets:
+              config['env'].setdefault('secret', [])
+              config['env']['secret'].extend(custom_secrets)
+
           os.makedirs('config', exist_ok=True)
           with open('config/deploy.yml', 'w') as f:
               yaml.dump(config, f, default_flow_style=False, sort_keys=False)
@@ -368,7 +430,10 @@ jobs:
           POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
           POSTGRES_HOST: ${{ steps.outputs.outputs.db_internal_ip }}
           POSTGRES_DB: ${{ github.event.repository.name }}
-        run: kamal setup
+        run: |
+          export DATABASE_URL="postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@$POSTGRES_HOST:5432/$POSTGRES_DB"
+          source /tmp/kamal_custom_secrets.env
+          kamal setup
 
       - name: Print Kamal deployment summary
         run: |

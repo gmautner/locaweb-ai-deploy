@@ -43,7 +43,6 @@ A single `workflow_dispatch` trigger provisions virtual machines, networking, st
 
 - **TLS with Let's Encrypt.** Enable kamal-proxy SSL termination once custom domain support is implemented. SSL is currently disabled; the `domain` input is reserved for this purpose.
 - **IP filtering for SSH.** Restrict SSH firewall rules to GitHub Actions runner IP ranges.
-- **Customizable secrets/variables with KAMAL_ prefix.** Provide an abstraction for importing GitHub secrets into Kamal.
 
 ---
 
@@ -136,8 +135,8 @@ A single-job workflow that provisions infrastructure and deploys the application
 9. **Print summary** -- Generates a Markdown table of provisioned resources in the GitHub Actions step summary.
 10. **Install Kamal** -- `gem install kamal` (Kamal 2 from RubyGems).
 11. **Prepare SSH key** -- Copies the private key to `.kamal/ssh_key` with mode 600.
-12. **Create secrets file** -- Writes `.kamal/secrets` with environment variable references for `KAMAL_REGISTRY_PASSWORD`, `POSTGRES_USER`, and `POSTGRES_PASSWORD`.
-13. **Generate deploy config** -- Inline Python dynamically generates `config/deploy.yml` (the Kamal configuration) from the provision output, incorporating conditional sections for workers and database accessories.
+12. **Create secrets file and process KAMAL_-prefixed entries** -- Writes `.kamal/secrets` with `$VAR` references for `KAMAL_REGISTRY_PASSWORD`, and conditionally `POSTGRES_USER`, `POSTGRES_PASSWORD`, and `DATABASE_URL` (if `db_enabled`). Also discovers GitHub secrets and variables with the `KAMAL_` prefix: secrets are added as `$VAR` references in `.kamal/secrets` (prefix stripped) and their resolved values are written to a sourceable env file for the deploy step; variables are written to a JSON file for the config generation step to merge as clear env vars.
+13. **Generate deploy config** -- Inline Python dynamically generates `config/deploy.yml` (the Kamal configuration) from the provision output, incorporating conditional sections for workers and database accessories. Merges any `KAMAL_`-prefixed custom variables as clear env vars and custom secrets as secret env vars.
 14. **Deploy with Kamal** -- Runs `kamal setup`, which handles Docker installation on all hosts, registry authentication, image build and push, accessory boot (PostgreSQL), and application deployment behind kamal-proxy.
 15. **Print deployment summary** -- Outputs commit SHA, image tag, application URL, and health check URL to the step summary.
 
@@ -296,12 +295,23 @@ drain_timeout: 30
 
 ```
 KAMAL_REGISTRY_PASSWORD=$KAMAL_REGISTRY_PASSWORD
-POSTGRES_USER=$POSTGRES_USER
-POSTGRES_PASSWORD=$POSTGRES_PASSWORD
-DATABASE_URL=postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@$POSTGRES_HOST:5432/$POSTGRES_DB
+POSTGRES_USER=$POSTGRES_USER                       # only if db_enabled
+POSTGRES_PASSWORD=$POSTGRES_PASSWORD                 # only if db_enabled
+DATABASE_URL=$DATABASE_URL                           # only if db_enabled
+# Any KAMAL_-prefixed GitHub secrets appear here with prefix stripped:
+# CUSTOM_VAR=$CUSTOM_VAR
 ```
 
-Kamal reads this file and resolves the `$VAR` references from the process environment, which GitHub Actions populates from repository secrets.
+All entries use `$VAR` references that Kamal resolves from the process environment at deploy time. No cleartext secrets are written to disk.
+
+**Custom environment variables via KAMAL_ prefix:**
+
+Users can pass additional environment variables to the application container by creating GitHub secrets or variables with the `KAMAL_` prefix. The prefix is stripped when mapping to the container:
+
+- **`KAMAL_`-prefixed GitHub Secrets** → added to `.kamal/secrets` and listed in `env.secret` (the container receives the secret value under the stripped name).
+- **`KAMAL_`-prefixed GitHub Variables** → added to `env.clear` in the Kamal config (the container receives the variable value under the stripped name).
+
+Example: a GitHub secret named `KAMAL_REDIS_URL` with value `redis://...` results in the container receiving `REDIS_URL=redis://...` as a secret env var. A GitHub variable named `KAMAL_LOG_LEVEL` with value `debug` results in `LOG_LEVEL=debug` as a clear env var.
 
 **Database environment variable contract** (when `db_enabled` is true):
 

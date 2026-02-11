@@ -16,3 +16,4 @@ This directory contains the Architectural Decision Records (ADRs) for the `locaw
 | [ADR-010](010-fail-fast-secret-validation.md) | Fail-Fast Secret Validation | Accepted |
 | [ADR-011](011-teardown-and-redeploy-recovery.md) | Teardown-and-Redeploy as Recovery Strategy | Accepted |
 | [ADR-012](012-standardized-postgres-env-vars.md) | Standardized PostgreSQL Environment Variables | Accepted |
+| [ADR-013](013-kamal-prefix-env-vars.md) | KAMAL_ Prefix Convention for Custom Environment Variables | Accepted |

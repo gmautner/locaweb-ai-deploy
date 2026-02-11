@@ -273,7 +273,6 @@ locaweb-ai-deploy/
 Near-term, actionable items:
 
 - **IP filtering for SSH access.** Restrict firewall rules for SSH (port 22) to GitHub Actions runner IP ranges only, rather than `0.0.0.0/0`.
-- **Customizable secrets and variables with KAMAL_ prefix.** Provide an abstraction for users to specify which GitHub secrets and variables get imported into the Kamal deployment environment using a `KAMAL_` prefix convention.
 - **TLS with Let's Encrypt.** Enable kamal-proxy SSL termination with Let's Encrypt certificates once custom domain support is implemented.
 
 ---
