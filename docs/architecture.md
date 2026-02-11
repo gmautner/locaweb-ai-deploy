@@ -1,0 +1,578 @@
+# Architecture Design Document -- locaweb-ai-deploy
+
+**Status:** Living document
+**Last updated:** 2026-02-11
+
+---
+
+## Table of Contents
+
+1. [Overview](#overview)
+2. [System Architecture](#system-architecture)
+3. [Component Details](#component-details)
+4. [Network Architecture](#network-architecture)
+5. [Data Flow](#data-flow)
+6. [Security Model](#security-model)
+7. [Reliability and Resilience](#reliability-and-resilience)
+8. [Technology Choices](#technology-choices)
+9. [Constraints and Limitations](#constraints-and-limitations)
+
+---
+
+## Overview
+
+`locaweb-ai-deploy` automates end-to-end deployment of containerized web applications onto Locaweb Cloud, a CloudStack-based IaaS platform. The system uses GitHub Actions as its orchestration layer and Kamal 2 as its container deployment tool.
+
+A single `workflow_dispatch` trigger provisions virtual machines, networking, storage, and firewall rules on CloudStack, then builds a Docker image, pushes it to the GitHub Container Registry (ghcr.io), and deploys the application via SSH using Kamal's zero-downtime deployment model.
+
+### Goals
+
+- **One-click deploys**: A single manual workflow dispatch provisions infrastructure and deploys the application with no intermediate steps.
+- **Configurable topology**: Users choose VM sizes, enable or disable worker VMs (with configurable replica count), and optionally add a dedicated PostgreSQL database VM -- all through workflow input parameters.
+- **Idempotent provisioning**: The provisioning script can be safely re-run; it detects existing resources by name and skips creation, enabling scale-up, scale-down, and configuration changes without destroying existing infrastructure.
+- **Clean teardown**: A separate workflow destroys all resources in deterministic reverse order.
+- **Testability**: An end-to-end test suite validates every deployment scenario (complete deploy, web-only, scale up, scale down, teardown) using isolated resources.
+
+### Non-goals
+
+- Multi-region or multi-cloud deployment.
+- Horizontal auto-scaling (scaling is manual via `workers_replicas` parameter).
+- Horizontal web scaling (the web tier scales vertically; Kamal Proxy with Let's Encrypt operates on a single web VM).
+
+### TODOs
+
+- **TLS with Let's Encrypt.** Enable kamal-proxy SSL termination once custom domain support is implemented. SSL is currently disabled; the `domain` input is reserved for this purpose.
+- **IP filtering for SSH.** Restrict SSH firewall rules to GitHub Actions runner IP ranges.
+- **Customizable secrets/variables with KAMAL_ prefix.** Provide an abstraction for importing GitHub secrets into Kamal.
+
+---
+
+## System Architecture
+
+The system is composed of five logical layers:
+
+```
++---------------------------------------------------------------+
+|                      GitHub Actions                           |
+|  (Orchestration: deploy.yml, teardown.yml, test.yml)          |
++---------------------------------------------------------------+
+        |                    |                    |
+        v                    v                    v
++----------------+  +------------------+  +------------------+
+| CloudMonkey    |  | Kamal 2          |  | Test Suite       |
+| (cmk CLI)      |  | (Ruby gem)       |  | (Python)         |
+| Provisions     |  | Deploys          |  | Validates        |
+| CloudStack     |  | containers       |  | infrastructure   |
+| resources      |  | via SSH          |  | end-to-end       |
++----------------+  +------------------+  +------------------+
+        |                    |
+        v                    v
++---------------------------------------------------------------+
+|                Locaweb Cloud (CloudStack)                      |
+|  +----------+  +----------+  +----------+                     |
+|  | Web VM   |  | Worker   |  | DB VM    |                     |
+|  | kamal-   |  | VMs (Nx) |  | postgres |                     |
+|  | proxy +  |  | app      |  | :16      |                     |
+|  | app      |  | workers  |  |          |                     |
+|  +----------+  +----------+  +----------+                     |
+|                                                               |
+|  Isolated Network  |  Public IPs  |  Data Disks  |  Snapshots |
++---------------------------------------------------------------+
+```
+
+### Resource naming convention
+
+All CloudStack resources are named using the pattern `{repo-name}-{unique-id}`, where `unique-id` is `github.repository_id` for production deployments and `github.run_id` for test runs. This ensures complete isolation between production and test infrastructure.
+
+> **Note:** The naming convention is subject to further refinement when multi-environment support is introduced, as the same repository will have distinct deployments per environment (e.g., staging vs. production).
+
+Examples:
+- Network: `my-app-123456789`
+- SSH keypair: `my-app-123456789-key`
+- Web VM: `my-app-123456789-web`
+- Worker VMs: `my-app-123456789-worker-1`, `my-app-123456789-worker-2`, ...
+- Database VM: `my-app-123456789-db`
+- Blob disk: `my-app-123456789-blob`
+- Database disk: `my-app-123456789-dbdata`
+
+---
+
+## Component Details
+
+### 1. GitHub Actions Workflows
+
+Three workflow files orchestrate the system. All are triggered by `workflow_dispatch` (manual trigger).
+
+#### deploy.yml
+
+A single-job workflow that provisions infrastructure and deploys the application sequentially. The job runs on `ubuntu-latest` and requires `contents: read` and `packages: write` permissions (the latter for ghcr.io image pushes).
+
+**Workflow inputs** (all configurable at dispatch time):
+
+| Input | Type | Default | Description |
+|---|---|---|---|
+| `zone` | choice | `ZP01` | CloudStack availability zone |
+| `domain` | string | `""` | Reserved for future TLS/domain support |
+| `web_plan` | choice | `small` | VM size for the web server |
+| `blob_disk_size_gb` | string | `20` | Data disk size for blob storage |
+| `workers_enabled` | boolean | `false` | Whether to create worker VMs |
+| `workers_replicas` | string | `1` | Number of worker VMs |
+| `workers_cmd` | string | `sleep infinity` | Container command for workers |
+| `workers_plan` | choice | `small` | VM size for workers |
+| `db_enabled` | boolean | `false` | Whether to create a database VM |
+| `db_plan` | choice | `medium` | VM size for the database |
+| `db_disk_size_gb` | string | `20` | Data disk size for PostgreSQL |
+
+**Step sequence:**
+
+1. **Validate secrets** -- If `db_enabled` is true, verifies that `POSTGRES_USER` and `POSTGRES_PASSWORD` secrets exist. Fails fast if missing.
+2. **Checkout repository** -- Standard `actions/checkout@v4`.
+3. **Build configuration** -- Inline Python assembles workflow inputs into a JSON config file at `/tmp/config.json`.
+4. **Extract SSH public key** -- Derives the public key from the `SSH_PRIVATE_KEY` secret using `ssh-keygen -y`.
+5. **Install CloudMonkey** -- Downloads the `cmk` binary, configures it with the CloudStack API endpoint (`painel-cloud.locaweb.com.br`), API key, and secret key. Runs `cmk sync` to populate the local API cache.
+6. **Provision infrastructure** -- Runs `scripts/provision_infrastructure.py` with the config JSON and public key. Outputs JSON to `/tmp/provision-output.json`.
+7. **Set outputs** -- Parses the provision output JSON and writes `web_ip`, `worker_ips`, `db_ip`, and `db_internal_ip` to `GITHUB_OUTPUT` for downstream consumption.
+8. **Upload artifact** -- Saves the provision output JSON as a GitHub artifact with 90-day retention.
+9. **Print summary** -- Generates a Markdown table of provisioned resources in the GitHub Actions step summary.
+10. **Install Kamal** -- `gem install kamal` (Kamal 2 from RubyGems).
+11. **Prepare SSH key** -- Copies the private key to `.kamal/ssh_key` with mode 600.
+12. **Create secrets file** -- Writes `.kamal/secrets` with environment variable references for `KAMAL_REGISTRY_PASSWORD`, `POSTGRES_USER`, and `POSTGRES_PASSWORD`.
+13. **Generate deploy config** -- Inline Python dynamically generates `config/deploy.yml` (the Kamal configuration) from the provision output, incorporating conditional sections for workers and database accessories.
+14. **Deploy with Kamal** -- Runs `kamal setup`, which handles Docker installation on all hosts, registry authentication, image build and push, accessory boot (PostgreSQL), and application deployment behind kamal-proxy.
+15. **Print deployment summary** -- Outputs commit SHA, image tag, application URL, and health check URL to the step summary.
+
+#### teardown.yml
+
+Destroys all CloudStack resources in reverse creation order. Uses the same CloudMonkey installation pattern as the deploy workflow.
+
+**Destruction sequence (8 steps):**
+
+1. Delete snapshot policies for all tagged data volumes.
+2. Detach and delete data volumes (blob, dbdata).
+3. Disable static NAT on all non-source-NAT public IPs.
+4. Delete firewall rules on all public IPs.
+5. Release (disassociate) public IPs.
+6. Destroy all VMs (with expunge to prevent lingering in the trash).
+7. Delete the isolated network (with a 5-second wait for VM expunge).
+8. Delete the SSH key pair.
+
+The teardown script treats all `cmk` failures as non-fatal warnings because resources may already be partially deleted.
+
+#### test.yml
+
+An end-to-end integration test workflow that validates infrastructure provisioning across multiple scenarios. Uses `github.run_id` as the unique identifier to isolate test resources from production.
+
+**Test phases:**
+
+| Phase | Scenario | Description |
+|---|---|---|
+| 0 | Initial teardown | Ensures a clean slate before testing |
+| 1a | Complete deploy | Web + 3 workers + DB; verifies all resources, SSH, mount points |
+| 1b | Scale down 3 to 1 | Re-provisions with 1 worker; verifies excess workers removed |
+| 1c | Teardown verify | Destroys and verifies all resources absent |
+| 2a | Web-only deploy | No workers, no DB; verifies minimal footprint |
+| 2b | Teardown verify | Destroys and verifies clean removal |
+| 3a | Deploy with features | 1 worker + DB; baseline for scale-up test |
+| 3b | Scale up 1 to 3 | Re-provisions with 3 workers; verifies new VMs created |
+| 3c | Teardown verify | Final cleanup and verification |
+
+The test workflow generates a fresh ed25519 SSH key pair per run to avoid CloudStack's unique-public-key-per-account constraint. An **emergency teardown** step runs unconditionally (`if: always()`) to ensure test resources are cleaned up even if the test suite crashes. Results are saved to `/tmp/test-results.json` and rendered as a Markdown table in the step summary.
+
+### 2. CloudStack Provisioning Script
+
+**File:** `scripts/provision_infrastructure.py`
+
+A Python script that uses the CloudMonkey CLI (`cmk`) to interact with the CloudStack API. It accepts a JSON configuration, an SSH public key, and naming parameters, then creates all required infrastructure.
+
+**Key behaviors:**
+
+- **Idempotency**: Every resource creation is preceded by a lookup. If a resource with the expected name already exists, it is reused. This makes the script safe to re-run and enables incremental changes.
+- **Retry with exponential backoff**: All `cmk` calls retry up to 5 times with exponential backoff (2, 4, 8, 16, 32 seconds) to handle transient CloudStack API errors. Final failures raise `RuntimeError`.
+- **Worker scale-down**: After deploying the desired number of workers, the script probes for excess workers (worker-N+1, worker-N+2, ...) and destroys them along with their associated public IPs, firewall rules, and static NAT mappings.
+- **Static NAT conflict avoidance**: When assigning public IPs, the script first checks for existing static NAT mappings per VM. It reuses existing assignments and only acquires new IPs for VMs that lack one. This prevents CloudStack's "VM already has a static NAT IP" error during scale-up scenarios.
+- **Userdata injection**: Web and DB VMs receive base64-encoded cloud-init scripts that format and mount their data disks.
+- **Volume tagging**: Data disks are tagged with `locaweb-ai-deploy-id={network-name}` to enable the teardown script to find them reliably.
+- **Template discovery**: Automatically selects the most recent Ubuntu 24.x template matching the regex `^Ubuntu.*24.*$`.
+
+**Resource creation order:**
+
+1. Resolve zone, offerings, and template IDs.
+2. Create isolated network.
+3. Register SSH key pair.
+4. Deploy VMs (web always, workers if enabled, DB if enabled) with userdata.
+5. Remove excess workers (scale-down).
+6. Assign public IPs with static NAT (1:1 per VM).
+7. Create firewall rules (SSH+HTTP+HTTPS for web, SSH only for workers and DB).
+8. Create and attach data disks (blob for web, dbdata for DB).
+9. Create daily snapshot policies with cross-zone replication.
+10. Retrieve internal (private) IPs for inter-VM communication.
+
+### 3. Teardown Script
+
+**File:** `scripts/teardown_infrastructure.py`
+
+Destroys all resources for a given network name in reverse creation order. Unlike the provision script, all `cmk` failures are non-fatal (logged as warnings) because partial deletion states are expected during teardown.
+
+### 4. Test Infrastructure Script
+
+**File:** `scripts/test_infrastructure.py`
+
+A custom test framework with `TestScenario` (context manager for assertion tracking) and `TestRunner` (orchestrates phases). Includes:
+
+- **SSHVerifier**: Polls SSH connectivity with 10-second intervals and 180-second timeout. Verifies remote mount points by running `mountpoint -q` via SSH.
+- **InfrastructureVerifier**: Queries CloudStack via `cmk` to verify existence/absence of networks, VMs, volumes, snapshot policies, public IPs, firewall rules, static NAT mappings, and SSH key pairs.
+
+### 5. Kamal 2 Deployment Configuration
+
+The Kamal configuration (`config/deploy.yml`) is generated dynamically by Python code embedded in the deploy workflow. It is never committed to the repository.
+
+**Configuration structure:**
+
+```yaml
+service: <repo-name>
+image: <owner/repo>
+registry:
+  server: ghcr.io
+  username: <repo-owner>
+  password:
+    - KAMAL_REGISTRY_PASSWORD          # GITHUB_TOKEN
+ssh:
+  user: root
+  keys:
+    - .kamal/ssh_key
+servers:
+  web:
+    hosts:
+      - <web-public-ip>
+  workers:                              # Only if workers_enabled
+    hosts:
+      - <worker-1-ip>
+      - <worker-N-ip>
+    cmd: <workers_cmd>
+    proxy: false                        # Workers do not use kamal-proxy
+proxy:
+  host: <web-ip>.nip.io                # Wildcard DNS via nip.io
+  app_port: 80
+  forward_headers: true
+  ssl: false
+  healthcheck:
+    path: /up
+    interval: 3
+    timeout: 5
+env:
+  clear:
+    BLOB_STORAGE_PATH: /data/blobs
+    DB_HOST: <db-internal-ip>           # Only if db_enabled
+    DB_PORT: "5432"
+    DB_NAME: <repo-name>
+  secret:                               # Only if db_enabled
+    - DB_USERNAME:POSTGRES_USER         # Aliased secret
+    - DB_PASSWORD:POSTGRES_PASSWORD
+volumes:
+  - /data/blobs:/data/blobs
+accessories:                            # Only if db_enabled
+  db:
+    image: postgres:16
+    host: <db-public-ip>
+    port: "5432:5432"
+    cmd: --shared_buffers=256MB
+    env:
+      clear:
+        POSTGRES_DB: <repo-name>
+        PGDATA: /var/lib/postgresql/data/pgdata   # Subdirectory for ext4
+      secret:
+        - POSTGRES_USER
+        - POSTGRES_PASSWORD
+    directories:
+      - /data/db:/var/lib/postgresql/data
+builder:
+  arch: amd64
+readiness_delay: 15
+deploy_timeout: 180
+drain_timeout: 30
+```
+
+**Secrets file** (`.kamal/secrets`):
+
+```
+KAMAL_REGISTRY_PASSWORD=$KAMAL_REGISTRY_PASSWORD
+POSTGRES_USER=$POSTGRES_USER
+POSTGRES_PASSWORD=$POSTGRES_PASSWORD
+```
+
+Kamal reads this file and resolves the `$VAR` references from the process environment, which GitHub Actions populates from repository secrets.
+
+### 6. Sample Application
+
+**File:** `app.py`
+
+A Flask web application that exercises all platform features:
+
+- **PostgreSQL CRUD**: A `notes` table for creating and listing text notes. Configuration via environment variables (`DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USERNAME`, `DB_PASSWORD`).
+- **Filesystem blob storage**: File uploads saved to the path specified by `BLOB_STORAGE_PATH` (default: `/data/blobs`), with timestamp-prefixed filenames.
+- **Health check endpoint**: `GET /up` runs `SELECT 1` against PostgreSQL and returns 200 OK or 503 if the database is unavailable. This endpoint is used by kamal-proxy for health-based routing.
+
+**Dockerfile:** Based on `python:3.12-slim`. The CMD retries `init_db()` up to 30 times with 2-second sleep between attempts (to wait for the PostgreSQL accessory to become available), then starts gunicorn with 2 workers on port 80.
+
+### 7. VM Userdata Scripts
+
+**Files:** `scripts/userdata/web_vm.sh`, `scripts/userdata/db_vm.sh`
+
+Cloud-init userdata scripts executed on first boot. Both follow the same pattern:
+
+1. Wait up to 300 seconds for the data disk device (`/dev/vdb`) to appear.
+2. Format as ext4 if no filesystem exists (preserves data on re-attach).
+3. Create the mount point and mount the device.
+4. Add an fstab entry with `nofail` for persistence across reboots.
+
+The web VM mounts at `/data/blobs`, the DB VM mounts at `/data/db`.
+
+---
+
+## Network Architecture
+
+```
+                        Internet
+                           |
+          +----------------+------------------+
+          |                |                  |
+          v                v                  v
+   [Public IP: web]  [Public IP: wk-1]  [Public IP: db]
+   FW: 22,80,443     FW: 22             FW: 22
+          |                |                  |
+     Static NAT       Static NAT         Static NAT
+     (1:1)             (1:1)              (1:1)
+          |                |                  |
+          v                v                  v
+   +-----------+    +-----------+      +-----------+
+   | Web VM    |    | Worker VM |      | DB VM     |
+   | 10.x.x.a |    | 10.x.x.b |      | 10.x.x.c |
+   |           |    |           |      |           |
+   | kamal-    |    | app       |      | postgres  |
+   | proxy     |    | worker    |      | :5432     |
+   | + app     |    | container |      | container |
+   | container |    |           |      |           |
+   +-----------+    +-----------+      +-----------+
+          |                |                  |
+          +----------------+------------------+
+                           |
+               CloudStack Isolated Network
+                  (private 10.x.x.0/24)
+```
+
+### Key networking characteristics
+
+- **Isolated network**: All VMs share a single CloudStack isolated network with private IPs in the 10.x.x.0/24 range. The network is created with the "Default Guest Network" offering and provides internal routing between all VMs without traversing public networks.
+- **Static NAT (1:1)**: Each VM receives a dedicated public IP with 1:1 static NAT. This maps all inbound ports on the public IP to the VM's private IP. Outbound traffic from VMs also uses their respective public IPs.
+- **Firewall rules**: CloudStack firewall rules control inbound access. The web VM allows TCP ports 22 (SSH), 80 (HTTP), and 443 (HTTPS). Worker and DB VMs allow only TCP port 22 (SSH). All rules use CIDR `0.0.0.0/0` (unrestricted source).
+- **Internal database access**: The web application connects to PostgreSQL using the DB VM's internal IP (`DB_HOST` environment variable), avoiding public network traversal for database traffic.
+- **Wildcard DNS**: kamal-proxy uses `<web-ip>.nip.io` for Host header routing. The nip.io service resolves any `A.B.C.D.nip.io` address to `A.B.C.D`, providing wildcard DNS without custom domain configuration.
+- **Source NAT**: CloudStack automatically provides a source NAT IP for the isolated network, used for outbound internet access (e.g., pulling Docker images from ghcr.io).
+
+---
+
+## Data Flow
+
+### Deployment data flow
+
+```
+1. User triggers workflow_dispatch
+   |
+   v
+2. GitHub Actions runner starts (ubuntu-latest)
+   |
+   +-- Assembles JSON config from workflow inputs
+   +-- Extracts SSH public key from private key secret
+   +-- Installs and configures CloudMonkey (cmk)
+   |
+   v
+3. Provision infrastructure (cmk -> CloudStack API)
+   |
+   +-- Creates network, keypair
+   +-- Deploys VMs with cloud-init userdata
+   +-- Assigns public IPs, static NAT, firewall rules
+   +-- Creates and attaches data disks
+   +-- Sets up daily snapshot policies
+   +-- Outputs JSON: {IPs, VM IDs, volume IDs}
+   |
+   v
+4. Generate Kamal config from provision output
+   |
+   v
+5. kamal setup (SSH -> each VM)
+   |
+   +-- Installs Docker on all hosts
+   +-- Logs into ghcr.io registry
+   +-- Builds Docker image (amd64)
+   +-- Pushes image to ghcr.io/<owner>/<repo>:<sha>
+   +-- Boots postgres accessory on DB VM (if enabled)
+   +-- Deploys web container behind kamal-proxy
+   +-- Deploys worker containers (if enabled)
+   |
+   v
+6. Application is live
+   |
+   +-- kamal-proxy routes HTTP by Host header
+   +-- Health checks at /up (SELECT 1)
+   +-- Provisioning output saved as GitHub artifact (90 days)
+```
+
+### Runtime request flow
+
+```
+HTTP Request -> Public IP -> Static NAT -> Web VM:80
+  -> kamal-proxy (Host header routing)
+    -> app container (gunicorn, 2 workers)
+      -> PostgreSQL (DB VM internal IP:5432)
+      -> Blob storage (/data/blobs on mounted data disk)
+```
+
+### Teardown data flow
+
+```
+workflow_dispatch -> CloudMonkey -> CloudStack API
+  1. Delete snapshot policies
+  2. Detach + delete data volumes
+  3. Disable static NAT
+  4. Delete firewall rules
+  5. Release public IPs
+  6. Destroy VMs (expunge=true)
+  7. Delete network (after 5s wait)
+  8. Delete SSH key pair
+```
+
+---
+
+## Security Model
+
+### Secret management
+
+| Secret | Scope | Purpose |
+|---|---|---|
+| `CLOUDSTACK_API_KEY` | GitHub repository secret | CloudStack API authentication |
+| `CLOUDSTACK_SECRET_KEY` | GitHub repository secret | CloudStack API authentication |
+| `SSH_PRIVATE_KEY` | GitHub repository secret | SSH access to all VMs |
+| `POSTGRES_USER` | GitHub repository secret | PostgreSQL superuser name |
+| `POSTGRES_PASSWORD` | GitHub repository secret | PostgreSQL superuser password |
+| `GITHUB_TOKEN` | Automatic (GitHub) | ghcr.io registry authentication |
+
+### Secret handling practices
+
+- **No secrets in source control**: The `.kamal/secrets` file uses `$VAR` references that Kamal resolves from the process environment at runtime. The file is generated during the workflow run and is never committed.
+- **SSH key isolation**: The private key is written to a temporary file with mode 600 during the workflow run. The public key is derived at runtime using `ssh-keygen -y` (the public key is never stored as a separate secret).
+- **Early validation**: When `db_enabled` is true, the workflow validates that `POSTGRES_USER` and `POSTGRES_PASSWORD` are set before any infrastructure is provisioned.
+- **Scoped tokens**: `GITHUB_TOKEN` is automatically provided by GitHub Actions with `packages: write` scope, limited to the current repository.
+
+### Network security
+
+- **Firewall rules**: Only the web VM is exposed on HTTP (80) and HTTPS (443). Workers and the database VM are reachable only via SSH (22) from the internet. Database traffic (5432) stays on the private network.
+- **Static NAT**: Each VM has its own dedicated public IP. There is no shared ingress point.
+- **SSH root access**: Kamal requires root SSH access for Docker management. The SSH key pair is unique per deployment.
+
+### Identified security considerations
+
+- Firewall rules use `0.0.0.0/0` source CIDR, meaning SSH is open to the internet on all VMs. IP filtering to GitHub Actions runner ranges is a near-term TODO.
+- The database VM's SSH port is exposed publicly, though PostgreSQL's port (5432) is not.
+- No TLS termination is currently configured (SSL is set to `false` in kamal-proxy). TLS with Let's Encrypt is planned (see TODOs section).
+- Worker VMs have public IPs with SSH access, even though they may not require external connectivity.
+
+---
+
+## Reliability and Resilience
+
+### Retry mechanisms
+
+| Component | Strategy | Details |
+|---|---|---|
+| CloudMonkey API calls | Exponential backoff | 5 retries: 2s, 4s, 8s, 16s, 32s (total ~62s max wait) |
+| Database initialization | Linear retry | 30 attempts with 2-second sleep (up to 60s) |
+| Disk attachment wait | Polling | 5-second intervals, 300-second timeout |
+| SSH connectivity (tests) | Polling | 10-second intervals, 180-second timeout |
+
+### Idempotent provisioning
+
+The provisioning script is fully idempotent. Every resource creation follows the pattern:
+
+1. Search for an existing resource by name.
+2. If found, log and return its ID.
+3. If not found, create it.
+
+This enables safe re-execution after partial failures and supports incremental topology changes (adding workers, enabling the database) without reprovisioning existing resources.
+
+### Data durability
+
+- **Data disks**: Persistent CloudStack volumes attached to VMs. Formatted as ext4 on first use; subsequent attachments preserve existing data.
+- **Snapshot policies**: Daily snapshots at 03:00 (America/Sao_Paulo timezone) with 3-snapshot retention. Snapshots are replicated across all available CloudStack zones.
+- **fstab persistence**: Data disk mount points are added to `/etc/fstab` with the `nofail` option, ensuring the VM boots even if the disk is temporarily unavailable.
+
+### Deployment reliability
+
+- **readiness_delay**: 15-second delay before health checks begin, allowing the application to initialize.
+- **deploy_timeout**: 180-second timeout for deployment operations.
+- **drain_timeout**: 30-second timeout for draining in-flight requests during container replacement.
+- **Health checks**: kamal-proxy checks `GET /up` every 3 seconds with a 5-second timeout. The endpoint verifies database connectivity.
+
+### Test coverage
+
+The test suite validates:
+
+- Resource creation and absence for all resource types.
+- Scale-up from 1 to 3 workers and scale-down from 3 to 1.
+- SSH connectivity to all VM types.
+- Data disk mount point verification via remote SSH commands.
+- Firewall rule correctness (exact port sets per VM role).
+- Static NAT mapping correctness (each IP points to the expected VM).
+- Complete teardown verification (no orphaned resources).
+- Emergency cleanup on test failure.
+
+---
+
+## Technology Choices
+
+| Technology | Role | Rationale |
+|---|---|---|
+| **Locaweb Cloud (CloudStack)** | IaaS platform | Target deployment platform. CloudStack-based API for VM, network, and storage management. |
+| **GitHub Actions** | CI/CD orchestration | Native integration with GitHub repositories. Provides secrets management, artifact storage, and `workflow_dispatch` for manual triggers. |
+| **CloudMonkey (cmk)** | CloudStack CLI | Official Apache CloudStack CLI. JSON output mode enables scriptable infrastructure management. Single static binary with no runtime dependencies. |
+| **Kamal 2** | Container deployment | SSH-based deployment tool. Handles Docker installation, image build/push, zero-downtime deployment, and accessory management without requiring a container orchestrator on the target hosts. |
+| **kamal-proxy** | Reverse proxy | Lightweight HTTP proxy included with Kamal. Provides Host header routing, health checks, and zero-downtime container swaps. |
+| **ghcr.io** | Container registry | GitHub Container Registry. Authentication via `GITHUB_TOKEN` eliminates the need for separate registry credentials. |
+| **Python** | Provisioning scripts | Used for infrastructure provisioning, teardown, test suite, and inline workflow scripts. Chosen for readability and availability on `ubuntu-latest` runners without installation. |
+| **Flask + gunicorn** | Sample application | Lightweight Python web framework for the sample app. gunicorn provides a production WSGI server with configurable worker count. |
+| **PostgreSQL 16** | Database | Deployed as a Kamal accessory in a Docker container on the dedicated DB VM. `shared_buffers=256MB` is passed as a startup parameter. PGDATA is set to a subdirectory to handle ext4 filesystem compatibility (the `lost+found` directory in the mount root). |
+| **nip.io** | Wildcard DNS | Free wildcard DNS service. Resolves `A.B.C.D.nip.io` to `A.B.C.D`, eliminating the need for custom DNS configuration during development and testing. |
+| **Ubuntu 24.x** | VM template | Auto-discovered from the CloudStack template catalog. Provides a recent LTS base with cloud-init support. |
+
+---
+
+## Constraints and Limitations
+
+### Platform constraints
+
+- **CloudStack static NAT**: CloudStack enforces a one-to-one mapping between a public IP and a VM for static NAT. A VM cannot have two static NAT IPs. The provisioning script explicitly handles this by checking existing mappings before assigning new ones.
+- **Single availability zone**: All resources for a deployment are created in a single CloudStack zone (ZP01 or ZP02). Cross-zone redundancy is not supported.
+- **VM plan names**: The provisioning script resolves service offering names (micro, small, medium, etc.) at runtime. Available offerings depend on the Locaweb Cloud account and zone.
+- **Data disk device path**: Userdata scripts hardcode `/dev/vdb` as the data disk device. This assumes the data disk is the first (and only) attached volume.
+
+### Deployment constraints
+
+- **Single web host**: The Kamal configuration supports only one web server host. Horizontal scaling of the web tier is not supported.
+- **Root SSH required**: Kamal requires root-level SSH access to manage Docker. Non-root deployment is not supported.
+- **No rolling updates for workers**: Worker containers are deployed simultaneously, not in a rolling fashion.
+- **No TLS (TODO)**: SSL is currently disabled in kamal-proxy. TLS with Let's Encrypt is planned once custom domain support is implemented (see TODOs section).
+- **Sequential provisioning and deployment**: Infrastructure provisioning and Kamal deployment run sequentially in a single job. A provisioning failure prevents deployment; a deployment failure leaves infrastructure provisioned.
+
+### Operational constraints
+
+- **Manual scaling**: Worker replica count must be changed by re-running the deploy workflow with a different `workers_replicas` value. There is no auto-scaling.
+- **No rollback mechanism**: The system does not provide automated rollback. A failed deployment requires manual intervention or re-running the workflow with a known-good commit.
+- **Artifact retention**: Provisioning output artifacts are retained for 90 days. After expiration, the resource mapping is no longer available through GitHub (though resources can still be found by name in CloudStack).
+- **Test isolation**: The test suite uses `github.run_id` for isolation, but shares the same CloudStack account. Concurrent test runs could conflict if resource limits are reached.
+- **Single database**: Only one PostgreSQL instance is supported. Multiple databases or read replicas are not configurable through the workflow.
+
+### Known limitations of the sample application
+
+- No connection pooling for PostgreSQL (new connection per request).
+- No authentication or authorization.
+- File uploads are stored with timestamp-prefixed names but no deduplication.
+- The `lost+found` directory in `/data/blobs` is explicitly filtered out of the file listing.
