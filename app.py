@@ -58,6 +58,12 @@ TEMPLATE = """<!DOCTYPE html>
   <li>{{ f }}</li>
 {% endfor %}
 </ul>
+<h2>HTTP Request Headers</h2>
+<table border="1" cellpadding="4" cellspacing="0">
+{% for key, value in headers %}
+  <tr><td><strong>{{ key }}</strong></td><td>{{ value }}</td></tr>
+{% endfor %}
+</table>
 </body>
 </html>"""
 
@@ -122,9 +128,11 @@ def index():
     my_var = os.environ.get("MY_VAR", "")
     my_secret = os.environ.get("MY_SECRET", "")
 
+    headers = sorted(request.headers)
+
     return render_template_string(TEMPLATE, notes=notes, files=files,
                                   my_var=my_var, my_secret=my_secret,
-                                  db_status=db_status)
+                                  db_status=db_status, headers=headers)
 
 
 @app.route("/notes", methods=["POST"])
