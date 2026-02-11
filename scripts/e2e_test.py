@@ -127,6 +127,10 @@ def wait_for_run(run_id):
 def download_artifact(run_id, artifact_name, dest_dir="/tmp"):
     """Download a workflow artifact. Returns path to the downloaded directory."""
     out_dir = os.path.join(dest_dir, artifact_name)
+    # Clean previous download so gh doesn't fail on existing files
+    if os.path.isdir(out_dir):
+        for f in os.listdir(out_dir):
+            os.remove(os.path.join(out_dir, f))
     os.makedirs(out_dir, exist_ok=True)
     gh("run", "download", str(run_id),
        "-n", artifact_name,
