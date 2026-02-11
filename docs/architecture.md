@@ -262,12 +262,12 @@ proxy:
 env:
   clear:
     BLOB_STORAGE_PATH: /data/blobs
-    DB_HOST: <db-internal-ip>           # Only if db_enabled
-    DB_PORT: "5432"
-    DB_NAME: <repo-name>
+    POSTGRES_HOST: <db-internal-ip>      # Only if db_enabled
+    POSTGRES_DB: <repo-name>
   secret:                               # Only if db_enabled
-    - DB_USERNAME:POSTGRES_USER         # Aliased secret
-    - DB_PASSWORD:POSTGRES_PASSWORD
+    - POSTGRES_USER
+    - POSTGRES_PASSWORD
+    - DATABASE_URL
 volumes:
   - /data/blobs:/data/blobs
 accessories:                            # Only if db_enabled
@@ -298,9 +298,24 @@ drain_timeout: 30
 KAMAL_REGISTRY_PASSWORD=$KAMAL_REGISTRY_PASSWORD
 POSTGRES_USER=$POSTGRES_USER
 POSTGRES_PASSWORD=$POSTGRES_PASSWORD
+DATABASE_URL=postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@$POSTGRES_HOST:5432/$POSTGRES_DB
 ```
 
 Kamal reads this file and resolves the `$VAR` references from the process environment, which GitHub Actions populates from repository secrets.
+
+**Database environment variable contract** (when `db_enabled` is true):
+
+The platform provides the following environment variables to the application container:
+
+| Variable | Source | Description |
+|----------|--------|-------------|
+| `POSTGRES_HOST` | Clear (db internal IP) | PostgreSQL server address |
+| `POSTGRES_DB` | Clear (repo name) | Database name, derived from the repository name |
+| `POSTGRES_USER` | Secret | PostgreSQL username |
+| `POSTGRES_PASSWORD` | Secret | PostgreSQL password |
+| `DATABASE_URL` | Secret | Full connection string (`postgres://user:pass@host:5432/db`) |
+
+`DATABASE_URL` is composed in `.kamal/secrets` via shell variable interpolation from the individual variables, and passed to the container as a secret since it contains the password.
 
 ### 6. Sample Application
 
@@ -308,7 +323,7 @@ Kamal reads this file and resolves the `$VAR` references from the process enviro
 
 A Flask web application that exercises all platform features:
 
-- **PostgreSQL CRUD**: A `notes` table for creating and listing text notes. Configuration via environment variables (`DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USERNAME`, `DB_PASSWORD`).
+- **PostgreSQL CRUD**: A `notes` table for creating and listing text notes. Configuration via environment variables (`POSTGRES_HOST`, `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`).
 - **Filesystem blob storage**: File uploads saved to the path specified by `BLOB_STORAGE_PATH` (default: `/data/blobs`), with timestamp-prefixed filenames.
 - **Health check endpoint**: `GET /up` runs `SELECT 1` against PostgreSQL and returns 200 OK or 503 if the database is unavailable. This endpoint is used by kamal-proxy for health-based routing.
 
@@ -365,7 +380,7 @@ The web VM mounts at `/data/blobs`, the DB VM mounts at `/data/db`.
 - **Isolated network**: All VMs share a single CloudStack isolated network with private IPs in the 10.x.x.0/24 range. The network is created with the "Default Guest Network" offering and provides internal routing between all VMs without traversing public networks.
 - **Static NAT (1:1)**: Each VM receives a dedicated public IP with 1:1 static NAT. This maps all inbound ports on the public IP to the VM's private IP. Outbound traffic from VMs also uses their respective public IPs.
 - **Firewall rules**: CloudStack firewall rules control inbound access. The web VM allows TCP ports 22 (SSH), 80 (HTTP), and 443 (HTTPS). Worker and DB VMs allow only TCP port 22 (SSH). All rules use CIDR `0.0.0.0/0` (unrestricted source).
-- **Internal database access**: The web application connects to PostgreSQL using the DB VM's internal IP (`DB_HOST` environment variable), avoiding public network traversal for database traffic.
+- **Internal database access**: The web application connects to PostgreSQL using the DB VM's internal IP (`POSTGRES_HOST` environment variable), avoiding public network traversal for database traffic.
 - **Wildcard DNS**: kamal-proxy uses `<web-ip>.nip.io` for Host header routing. The nip.io service resolves any `A.B.C.D.nip.io` address to `A.B.C.D`, providing wildcard DNS without custom domain configuration.
 - **Source NAT**: CloudStack automatically provides a source NAT IP for the isolated network, used for outbound internet access (e.g., pulling Docker images from ghcr.io).
 

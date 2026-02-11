@@ -12,6 +12,7 @@ This directory contains the Architectural Decision Records (ADRs) for the `locaw
 | [ADR-006](006-static-nat-for-public-ip.md) | Static NAT (1:1) for Public IP Assignment | Accepted |
 | [ADR-007](007-pgdata-subdirectory.md) | PGDATA Subdirectory for ext4 Volume Compatibility | Accepted |
 | [ADR-008](008-nip-io-wildcard-dns.md) | nip.io for Wildcard DNS | Accepted |
-| [ADR-009](009-aliased-secrets.md) | Aliased Secrets for Environment Variable Mapping | Accepted |
+| [ADR-009](009-aliased-secrets.md) | Aliased Secrets for Environment Variable Mapping | Superseded by ADR-012 |
 | [ADR-010](010-fail-fast-secret-validation.md) | Fail-Fast Secret Validation | Accepted |
 | [ADR-011](011-teardown-and-redeploy-recovery.md) | Teardown-and-Redeploy as Recovery Strategy | Accepted |
+| [ADR-012](012-standardized-postgres-env-vars.md) | Standardized PostgreSQL Environment Variables | Accepted |

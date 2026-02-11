@@ -117,7 +117,7 @@ The deployed application must meet the following contract:
 | FR-27 | The application shall listen on port 80. |
 | FR-28 | The application shall be built from a single Dockerfile at the repository root. |
 | FR-29 | If using workers, the same Dockerfile shall support a configurable CMD entrypoint for the worker process. |
-| FR-30 | If connecting to a database, the application shall read connection information from environment variables (e.g., `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USERNAME`, `DB_PASSWORD`). |
+| FR-30 | If connecting to a database, the application shall read connection information from environment variables: `POSTGRES_HOST`, `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`, and `DATABASE_URL`. |
 | FR-31 | The application shall provide a health check endpoint at `/up` that returns HTTP 200 when healthy. |
 | FR-32 | The application shall be designed to scale vertically (larger VM) rather than horizontally (multiple web instances), as kamal-proxy with Let's Encrypt operates on a single web VM. |
 

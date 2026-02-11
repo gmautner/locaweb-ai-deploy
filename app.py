@@ -12,11 +12,11 @@ import psycopg2
 app = Flask(__name__)
 
 DB_CONFIG = {
-    "host": os.environ.get("DB_HOST", "localhost"),
-    "port": os.environ.get("DB_PORT", "5432"),
-    "dbname": os.environ.get("DB_NAME", "app"),
-    "user": os.environ.get("DB_USERNAME", "app"),
-    "password": os.environ.get("DB_PASSWORD", ""),
+    "host": os.environ.get("POSTGRES_HOST", "localhost"),
+    "port": "5432",
+    "dbname": os.environ.get("POSTGRES_DB", "app"),
+    "user": os.environ.get("POSTGRES_USER", "app"),
+    "password": os.environ.get("POSTGRES_PASSWORD", ""),
 }
 
 BLOB_PATH = os.environ.get("BLOB_STORAGE_PATH", "/data/blobs")
