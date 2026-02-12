@@ -277,6 +277,30 @@ class SSHVerifier:
             return int(stdout.strip())
         return None
 
+    def verify_auto_upgrades_enabled(self, ip):
+        """Check that /etc/apt/apt.conf.d/20auto-upgrades has the right content."""
+        rc, stdout, _ = self.run_command(
+            ip, "cat /etc/apt/apt.conf.d/20auto-upgrades")
+        if rc != 0:
+            return False
+        return ('Update-Package-Lists "1"' in stdout
+                and 'Unattended-Upgrade "1"' in stdout)
+
+    def verify_automatic_reboot(self, ip, expected_time):
+        """Check that 52-automatic-reboots exists with correct reboot settings."""
+        rc, stdout, _ = self.run_command(
+            ip, "cat /etc/apt/apt.conf.d/52-automatic-reboots")
+        if rc != 0:
+            return False
+        return ('Automatic-Reboot "true"' in stdout
+                and f'Automatic-Reboot-Time "{expected_time}"' in stdout)
+
+    def verify_no_automatic_reboot(self, ip):
+        """Check that 52-automatic-reboots does NOT exist."""
+        rc, _, _ = self.run_command(
+            ip, "test ! -f /etc/apt/apt.conf.d/52-automatic-reboots")
+        return rc == 0
+
 
 # ---------------------------------------------------------------------------
 # HTTP Verifier
@@ -518,6 +542,8 @@ class E2ETestRunner:
                 "workers_enabled": "true",
                 "workers_replicas": "1",
                 "db_enabled": "true",
+                "automatic_reboot": "true",
+                "automatic_reboot_time_utc": "03:30",
             })
 
             web_ip = output.get("web_ip", "")
@@ -616,6 +642,17 @@ class E2ETestRunner:
                     s.assert_true(my_secret is not None and my_secret != "",
                                   f"SSH to Worker-{i}: MY_SECRET is set")
 
+            # Unattended upgrades: all VMs should have auto-upgrades + reboot at 03:30
+            all_ips = [("web", web_ip)] + [(f"worker-{i}", w) for i, w in enumerate(worker_ips, 1)] + [("db", db_ip)]
+            for label, ip in all_ips:
+                if ip:
+                    s.assert_true(
+                        self.ssh.verify_auto_upgrades_enabled(ip),
+                        f"Unattended upgrades enabled on {label}")
+                    s.assert_true(
+                        self.ssh.verify_automatic_reboot(ip, "03:30"),
+                        f"Automatic reboot at 03:30 on {label}")
+
             # Teardown
             trigger_teardown()
 
@@ -628,9 +665,10 @@ class E2ETestRunner:
     def _scenario_web_only(self):
         s = TestScenario("Web-Only Deploy")
         with s:
-            # Deploy with defaults (no workers, no db)
+            # Deploy with defaults (no workers, no db), reboot disabled
             output = trigger_deploy({
                 "zone": ZONE,
+                "automatic_reboot": "false",
             })
 
             web_ip = output.get("web_ip", "")
@@ -680,6 +718,14 @@ class E2ETestRunner:
             s.assert_true(
                 self.ssh.verify_mount_point(web_ip, "/data/blobs"),
                 "SSH to web VM: /data/blobs mounted")
+
+            # Unattended upgrades: auto-upgrades present, but no automatic reboot
+            s.assert_true(
+                self.ssh.verify_auto_upgrades_enabled(web_ip),
+                "Unattended upgrades enabled on web")
+            s.assert_true(
+                self.ssh.verify_no_automatic_reboot(web_ip),
+                "No automatic reboot file on web (reboot disabled)")
 
             # Teardown
             trigger_teardown()
@@ -827,6 +873,20 @@ class E2ETestRunner:
             s.assert_true(
                 http2.wait_for_healthy("/up", timeout=120),
                 "HTTP /up returns 200 (after scale up)")
+
+            # Unattended upgrades: defaults (reboot=true, time=05:00) on all VMs after scale
+            all_ips_scaled = (
+                [("web", web_ip2)]
+                + [(f"worker-{i}", w) for i, w in enumerate(worker_ips2, 1)]
+                + ([("db", db_ip2)] if db_ip2 else [])
+            )
+            for label, ip in all_ips_scaled:
+                s.assert_true(
+                    self.ssh.verify_auto_upgrades_enabled(ip),
+                    f"Unattended upgrades enabled on {label} (after scale)")
+                s.assert_true(
+                    self.ssh.verify_automatic_reboot(ip, "05:00"),
+                    f"Automatic reboot at 05:00 on {label} (after scale)")
 
             # Teardown
             trigger_teardown()

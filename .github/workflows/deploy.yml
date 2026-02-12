@@ -99,6 +99,14 @@ on:
         description: "Database disk size in GB"
         required: false
         default: "20"
+      automatic_reboot:
+        description: "Enable automatic reboot after unattended upgrades"
+        type: boolean
+        default: true
+      automatic_reboot_time_utc:
+        description: "Automatic reboot time in HH:MM UTC"
+        required: false
+        default: "05:00"
 
 jobs:
   deploy:
@@ -211,6 +219,14 @@ jobs:
           if d.get("db_ip"):
               print(f'| Database | {d["db_ip"]} |')
           PYEOF
+
+      - name: Configure unattended upgrades
+        run: |
+          python3 -u scripts/configure_unattended_upgrades.py \
+            --ssh-key /tmp/ssh_key \
+            --provision-output /tmp/provision-output.json \
+            --automatic-reboot "${{ inputs.automatic_reboot }}" \
+            --reboot-time "${{ inputs.automatic_reboot_time_utc }}"
 
       - name: Install Kamal
         run: |
