@@ -36,7 +36,7 @@ on:
           - ZP01
           - ZP02
       domain:
-        description: "Domain (optional, for future use)"
+        description: "Custom domain (optional, enables SSL via Let's Encrypt)"
         required: false
         default: ""
       web_plan:
@@ -251,6 +251,7 @@ jobs:
           INPUT_WORKERS_ENABLED: ${{ inputs.workers_enabled }}
           INPUT_WORKERS_CMD: ${{ inputs.workers_cmd }}
           INPUT_DB_ENABLED: ${{ inputs.db_enabled }}
+          INPUT_DOMAIN: ${{ inputs.domain }}
           REPO_NAME: ${{ github.event.repository.name }}
           REPO_FULL: ${{ github.repository }}
           REPO_OWNER: ${{ github.repository_owner }}
@@ -269,18 +270,30 @@ jobs:
           kamal setup
 
       - name: Print Kamal deployment summary
+        env:
+          INPUT_DOMAIN: ${{ inputs.domain }}
         run: |
           python3 << 'PYEOF' >> $GITHUB_STEP_SUMMARY
           import json, os
           d = json.load(open('/tmp/provision-output.json'))
           web_ip = d.get('web_ip', 'N/A')
+          domain = os.environ.get('INPUT_DOMAIN', '').strip()
           sha = os.environ.get('GITHUB_SHA', 'unknown')[:7]
           repo = os.environ.get('GITHUB_REPOSITORY', '')
+          if domain:
+              url = f'https://{domain}'
+              health = f'https://{domain}/up'
+          else:
+              url = f'http://{web_ip}'
+              health = f'http://{web_ip}/up'
           print('')
           print('## Kamal Deployment Complete')
           print('')
           print(f'- **Commit:** `{sha}`')
           print(f'- **Image:** `ghcr.io/{repo}:{sha}`')
-          print(f'- **URL:** http://{web_ip}')
-          print(f'- **Health check:** http://{web_ip}/up')
+          print(f'- **URL:** {url}')
+          print(f'- **Health check:** {health}')
+          if domain:
+              print(f'- **Domain:** `{domain}` (SSL via Let\'s Encrypt)')
+              print(f'- **Public IP:** `{web_ip}` (point DNS A record here)')
           PYEOF

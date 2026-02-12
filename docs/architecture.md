@@ -41,7 +41,6 @@ A single `workflow_dispatch` trigger provisions virtual machines, networking, st
 
 ### TODOs
 
-- **TLS with Let's Encrypt.** Enable kamal-proxy SSL termination once custom domain support is implemented. SSL is currently disabled; the `domain` input is reserved for this purpose.
 - **IP filtering for SSH.** Restrict SSH firewall rules to GitHub Actions runner IP ranges.
 
 ---
@@ -114,7 +113,7 @@ A single-job workflow that provisions infrastructure and deploys the application
 | Input | Type | Default | Description |
 |---|---|---|---|
 | `zone` | choice | `ZP01` | CloudStack availability zone |
-| `domain` | string | `""` | Reserved for future TLS/domain support |
+| `domain` | string | `""` | Custom domain; enables SSL via Let's Encrypt when set |
 | `web_plan` | choice | `small` | VM size for the web server |
 | `blob_disk_size_gb` | string | `20` | Data disk size for blob storage |
 | `workers_enabled` | boolean | `false` | Whether to create worker VMs |
@@ -139,7 +138,7 @@ A single-job workflow that provisions infrastructure and deploys the application
 10. **Install Kamal** -- `gem install kamal` (Kamal 2 from RubyGems).
 11. **Prepare SSH key** -- Copies the private key to `.kamal/ssh_key` with mode 600.
 12. **Create secrets file and process KAMAL_-prefixed entries** -- Writes `.kamal/secrets` with `$VAR` references for `KAMAL_REGISTRY_PASSWORD`, and conditionally `POSTGRES_USER`, `POSTGRES_PASSWORD`, and `DATABASE_URL` (if `db_enabled`). Also discovers GitHub secrets and variables with the `KAMAL_` prefix: secrets are added as `$VAR` references in `.kamal/secrets` (prefix stripped) and their resolved values are written to a sourceable env file for the deploy step; variables are written to a JSON file for the config generation step to merge as clear env vars.
-13. **Generate deploy config** -- Inline Python dynamically generates `config/deploy.yml` (the Kamal configuration) from the provision output, incorporating conditional sections for workers and database accessories. Merges any `KAMAL_`-prefixed custom variables as clear env vars and custom secrets as secret env vars.
+13. **Generate deploy config** -- Inline Python dynamically generates `config/deploy.yml` (the Kamal configuration) from the provision output, incorporating conditional sections for workers and database accessories. When the `domain` input is set, the proxy host is set to the domain and SSL is enabled via Let's Encrypt; otherwise, nip.io wildcard DNS is used with SSL disabled. Merges any `KAMAL_`-prefixed custom variables as clear env vars and custom secrets as secret env vars.
 14. **Deploy with Kamal** -- Runs `kamal setup`, which handles Docker installation on all hosts, registry authentication, image build and push, accessory boot (PostgreSQL), and application deployment behind kamal-proxy.
 15. **Print deployment summary** -- Outputs commit SHA, image tag, application URL, and health check URL to the step summary.
 
@@ -301,10 +300,10 @@ servers:
     cmd: <workers_cmd>
     proxy: false                        # Workers do not use kamal-proxy
 proxy:
-  host: <web-ip>.nip.io                # Wildcard DNS via nip.io
+  host: <domain> or <web-ip>.nip.io    # Custom domain or wildcard DNS via nip.io
   app_port: 80
-  forward_headers: true
-  ssl: false
+  forward_headers: false                # No upstream load balancers (static NAT direct to internet)
+  ssl: true/false                       # true when domain is set (Let's Encrypt); false otherwise
   healthcheck:
     path: /up
     interval: 3
@@ -445,7 +444,7 @@ The web VM mounts at `/data/blobs`, the DB VM mounts at `/data/db`.
 - **Static NAT (1:1)**: Each VM receives a dedicated public IP with 1:1 static NAT. This maps all inbound ports on the public IP to the VM's private IP. Outbound traffic from VMs also uses their respective public IPs.
 - **Firewall rules**: CloudStack firewall rules control inbound access. The web VM allows TCP ports 22 (SSH), 80 (HTTP), and 443 (HTTPS). Worker and DB VMs allow only TCP port 22 (SSH). All rules use CIDR `0.0.0.0/0` (unrestricted source).
 - **Internal database access**: The web application connects to PostgreSQL using the DB VM's internal IP (`POSTGRES_HOST` environment variable), avoiding public network traversal for database traffic.
-- **Wildcard DNS**: kamal-proxy uses `<web-ip>.nip.io` for Host header routing. The nip.io service resolves any `A.B.C.D.nip.io` address to `A.B.C.D`, providing wildcard DNS without custom domain configuration.
+- **Wildcard DNS / Custom domain**: When no custom domain is configured, kamal-proxy uses `<web-ip>.nip.io` for Host header routing. The nip.io service resolves any `A.B.C.D.nip.io` address to `A.B.C.D`, providing wildcard DNS without custom domain configuration. When a custom domain is set, kamal-proxy uses the domain as the proxy host and enables SSL via Let's Encrypt (automatic certificate provisioning on port 443).
 - **Source NAT**: CloudStack automatically provides a source NAT IP for the isolated network, used for outbound internet access (e.g., pulling Docker images from ghcr.io).
 
 ---
@@ -499,8 +498,8 @@ The web VM mounts at `/data/blobs`, the DB VM mounts at `/data/db`.
 ### Runtime request flow
 
 ```
-HTTP Request -> Public IP -> Static NAT -> Web VM:80
-  -> kamal-proxy (Host header routing)
+HTTP/HTTPS Request -> Public IP -> Static NAT -> Web VM:80/443
+  -> kamal-proxy (Host header routing; TLS termination if domain configured)
     -> app container (gunicorn, 2 workers)
       -> PostgreSQL (DB VM internal IP:5432)
       -> Blob storage (/data/blobs on mounted data disk)
@@ -587,7 +586,7 @@ workflow_dispatch -> CloudMonkey -> CloudStack API
 
 - Firewall rules use `0.0.0.0/0` source CIDR, meaning SSH is open to the internet on all VMs. IP filtering to GitHub Actions runner ranges is a near-term TODO.
 - The database VM's SSH port is exposed publicly, though PostgreSQL's port (5432) is not.
-- No TLS termination is currently configured (SSL is set to `false` in kamal-proxy). TLS with Let's Encrypt is planned (see TODOs section).
+- TLS via Let's Encrypt is available when a custom domain is configured. Without a domain, traffic is unencrypted HTTP over nip.io.
 - Worker VMs have public IPs with SSH access, even though they may not require external connectivity.
 
 ---
@@ -689,7 +688,7 @@ Two complementary test suites validate the system at different levels:
 - **Single web host**: The Kamal configuration supports only one web server host. Horizontal scaling of the web tier is not supported.
 - **Root SSH required**: Kamal requires root-level SSH access to manage Docker. Non-root deployment is not supported.
 - **No rolling updates for workers**: Worker containers are deployed simultaneously, not in a rolling fashion.
-- **No TLS (TODO)**: SSL is currently disabled in kamal-proxy. TLS with Let's Encrypt is planned once custom domain support is implemented (see TODOs section).
+- **TLS requires a custom domain**: SSL via Let's Encrypt is enabled when the `domain` input is set. Without a domain, kamal-proxy serves plain HTTP over nip.io (Let's Encrypt cannot issue certificates for nip.io subdomains).
 - **Sequential provisioning and deployment**: Infrastructure provisioning and Kamal deployment run sequentially in a single job. A provisioning failure prevents deployment; a deployment failure leaves infrastructure provisioned.
 
 ### Operational constraints

@@ -5,6 +5,7 @@ Reads from environment:
   INPUT_WORKERS_ENABLED - Whether workers are enabled
   INPUT_WORKERS_CMD     - Command for worker containers
   INPUT_DB_ENABLED      - Whether database is enabled
+  INPUT_DOMAIN          - Custom domain (optional, enables SSL via Let's Encrypt)
   REPO_NAME             - Repository name
   REPO_FULL             - Full repository path (owner/name)
   REPO_OWNER            - Repository owner
@@ -27,6 +28,7 @@ d = json.load(open('/tmp/provision-output.json'))
 workers_enabled = os.environ.get('INPUT_WORKERS_ENABLED') == 'true'
 workers_cmd = os.environ.get('INPUT_WORKERS_CMD', '')
 db_enabled = os.environ.get('INPUT_DB_ENABLED') == 'true'
+domain = os.environ.get('INPUT_DOMAIN', '').strip()
 repo_name = os.environ['REPO_NAME']
 repo_full = os.environ['REPO_FULL']
 repo_owner = os.environ['REPO_OWNER']
@@ -54,10 +56,10 @@ config = {
         },
     },
     'proxy': {
-        'host': f'{web_ip}.nip.io',
+        'host': domain if domain else f'{web_ip}.nip.io',
         'app_port': 80,
-        'forward_headers': True,
-        'ssl': False,
+        'forward_headers': False,
+        'ssl': bool(domain),
         'healthcheck': {
             'path': '/up',
             'interval': 3,

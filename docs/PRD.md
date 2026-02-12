@@ -76,7 +76,7 @@ Users of the workflow (whether human or agent) should not need to interact direc
 | FR-13 | The system shall install Docker on all freshly provisioned VMs. |
 | FR-14 | The system shall build the application Docker image and push it to ghcr.io using the repository's GITHUB_TOKEN. |
 | FR-15 | The system shall deploy the web application container via Kamal 2 with zero-downtime proxy (kamal-proxy). |
-| FR-16 | The system shall use nip.io wildcard DNS to map the public IP to a hostname for kamal-proxy routing. |
+| FR-16 | When no custom domain is configured, the system shall use nip.io wildcard DNS to map the public IP to a hostname for kamal-proxy routing. When a custom domain is configured, the system shall use the domain as the proxy host and enable SSL via Let's Encrypt. |
 | FR-17 | If database is enabled, the system shall deploy PostgreSQL as a Kamal accessory on the database VM. |
 | FR-18 | If workers are enabled, the system shall deploy worker containers on each worker VM with the configured command. |
 | FR-19 | Inter-VM communication (e.g., web to database) shall use internal/private IP addresses. |
