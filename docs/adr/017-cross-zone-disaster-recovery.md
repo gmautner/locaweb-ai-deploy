@@ -1,13 +1,17 @@
-# ADR-017: Cross-Zone Disaster Recovery via Snapshot Replicas
+# ADR-017: Disaster Recovery via Snapshots
 
 **Status:** Accepted
 **Date:** 2026-02-12
 
 ## Context
 
-CloudStack snapshot policies already replicate snapshots to all available zones. When a deployment in one zone is lost (hardware failure, zone outage) or when we want to migrate to a different zone, the data is available as snapshot replicas -- but the provisioning script had no mechanism to create volumes from those snapshots.
+The provisioning script had no mechanism to create volumes from snapshots. When a deployment is lost (teardown, VM failure, or intentional migration), the data on the blob and database disks is gone even though snapshots exist.
 
-We needed a way to recover a deployment into a different zone using the replicated snapshot data, without requiring manual CloudStack API interaction.
+We needed a way to recover a deployment from existing snapshots without requiring manual CloudStack API interaction.
+
+### Cross-zone replication
+
+CloudStack's `createSnapshot` and `createSnapshotPolicy` APIs accept a `zoneids` parameter for cross-zone replication, and there is a `copySnapshot` API. However, Locaweb Cloud does not support cross-zone snapshot copying (`copySnapshot` returns error 530). This means snapshots are only available in the zone where the original volume existed. If cross-zone support is added in the future, the recovery code will work without changes — it simply looks for snapshots in the target zone.
 
 ## Decision
 
@@ -28,15 +32,16 @@ The `find_network` and `find_volume` helpers were made zone-aware (accepting an 
 
 ### Positive
 
-- Cross-zone disaster recovery is a single workflow dispatch with `recover=true` and a different `zone`.
+- Disaster recovery is a single workflow dispatch with `recover=true` after teardown/loss.
 - Pre-flight checks prevent accidental data loss by refusing to recover over an existing deployment.
 - Recovered deployments get their own snapshot policies, maintaining the same data protection as fresh deployments.
 - No changes to the application or userdata scripts were required.
+- If cross-zone snapshot support is added to Locaweb Cloud in the future, the recovery code works for cross-zone recovery without changes.
 
 ### Negative
 
-- Recovery depends on snapshot replication having completed to the target zone. If snapshots haven't replicated yet, recovery will fail with a clear error message.
-- The `recover` input must be used with a zone different from the original deployment. Using it in the same zone where the deployment still exists will fail the pre-flight checks.
+- Currently limited to same-zone recovery due to Locaweb Cloud not supporting cross-zone snapshot operations.
+- The existing deployment must be torn down before recovery can proceed (pre-flight checks enforce this).
 - Manual snapshots must be created for immediate recovery testing since daily snapshots run on a schedule (06:00 UTC).
 
 ### Neutral

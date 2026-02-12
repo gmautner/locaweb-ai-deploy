@@ -123,7 +123,7 @@ A single-job workflow that provisions infrastructure and deploys the application
 | `db_enabled` | boolean | `false` | Whether to create a database VM |
 | `db_plan` | choice | `medium` | VM size for the database |
 | `db_disk_size_gb` | string | `20` | Data disk size for PostgreSQL |
-| `recover` | boolean | `false` | Recover data disks from snapshots (cross-zone DR) |
+| `recover` | boolean | `false` | Recover data disks from snapshots (disaster recovery) |
 
 **Step sequence:**
 
@@ -707,7 +707,7 @@ Two complementary test suites validate the system at different levels:
 ### Platform constraints
 
 - **CloudStack static NAT**: CloudStack enforces a one-to-one mapping between a public IP and a VM for static NAT. A VM cannot have two static NAT IPs. The provisioning script explicitly handles this by checking existing mappings before assigning new ones.
-- **Single availability zone**: All resources for a deployment are created in a single CloudStack zone (ZP01 or ZP02). Cross-zone disaster recovery is supported via snapshot replication: the `recover` input creates data volumes from snapshots replicated to the target zone.
+- **Single availability zone**: All resources for a deployment are created in a single CloudStack zone (ZP01 or ZP02). Same-zone disaster recovery is supported via the `recover` input, which creates data volumes from existing snapshots. Cross-zone recovery is not currently supported because Locaweb Cloud does not support the `copySnapshot` API.
 - **VM plan names**: The provisioning script resolves service offering names (micro, small, medium, etc.) at runtime. Available offerings depend on the Locaweb Cloud account and zone.
 - **Data disk device path**: Userdata scripts hardcode `/dev/vdb` as the data disk device. This assumes the data disk is the first (and only) attached volume.
 
