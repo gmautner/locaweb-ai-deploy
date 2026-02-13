@@ -9,9 +9,9 @@
 #   POSTGRES_USER         - PostgreSQL username (if db_enabled)
 #   POSTGRES_PASSWORD     - PostgreSQL password (if db_enabled)
 #
-# Optional KAMAL_-prefixed secrets/variables:
-#   Secrets with KAMAL_ prefix  → passed to the container as secret env vars (prefix stripped)
-#   Variables with KAMAL_ prefix → passed to the container as clear env vars (prefix stripped)
+# Optional custom container env vars (dotenv format):
+#   KAMAL_SECRETS (secret)   - key=value pairs passed as secret env vars to the container
+#   KAMAL_VARS (variable)    - key=value pairs passed as clear env vars to the container
 #
 # Note: GITHUB_TOKEN is used for ghcr.io registry access (no separate REGISTRY_TOKEN needed).
 

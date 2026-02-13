@@ -138,8 +138,8 @@ A single-job workflow that provisions infrastructure and deploys the application
 9. **Print summary** -- Generates a Markdown table of provisioned resources in the GitHub Actions step summary.
 10. **Install Kamal** -- `gem install kamal` (Kamal 2 from RubyGems).
 11. **Prepare SSH key** -- Copies the private key to `.kamal/ssh_key` with mode 600.
-12. **Create secrets file and process KAMAL_-prefixed entries** -- Writes `.kamal/secrets` with `$VAR` references for `KAMAL_REGISTRY_PASSWORD`, and conditionally `POSTGRES_USER`, `POSTGRES_PASSWORD`, and `DATABASE_URL` (if `db_enabled`). Also discovers GitHub secrets and variables with the `KAMAL_` prefix: secrets are added as `$VAR` references in `.kamal/secrets` (prefix stripped) and their resolved values are written to a sourceable env file for the deploy step; variables are written to a JSON file for the config generation step to merge as clear env vars.
-13. **Generate deploy config** -- Inline Python dynamically generates `config/deploy.yml` (the Kamal configuration) from the provision output, incorporating conditional sections for workers and database accessories. When the `domain` input is set, the proxy host is set to the domain and SSL is enabled via Let's Encrypt; otherwise, nip.io wildcard DNS is used with SSL disabled. Merges any `KAMAL_`-prefixed custom variables as clear env vars and custom secrets as secret env vars.
+12. **Create secrets file and env vars** -- Writes `.kamal/secrets` with `$VAR` references for `KAMAL_REGISTRY_PASSWORD`, and conditionally `POSTGRES_USER`, `POSTGRES_PASSWORD`, and `DATABASE_URL` (if `db_enabled`). Parses the `KAMAL_SECRETS` secret and `KAMAL_VARS` variable (both in dotenv format) using `python-dotenv`: secrets are added as `$VAR` references in `.kamal/secrets` and their resolved values are written to a sourceable env file for the deploy step; variables are written to a JSON file for the config generation step to merge as clear env vars.
+13. **Generate deploy config** -- Inline Python dynamically generates `config/deploy.yml` (the Kamal configuration) from the provision output, incorporating conditional sections for workers and database accessories. When the `domain` input is set, the proxy host is set to the domain and SSL is enabled via Let's Encrypt; otherwise, nip.io wildcard DNS is used with SSL disabled. Merges any custom variables from `KAMAL_VARS` as clear env vars and custom secrets from `KAMAL_SECRETS` as secret env vars.
 14. **Deploy with Kamal** -- Runs `kamal setup`, which handles Docker installation on all hosts, registry authentication, image build and push, accessory boot (PostgreSQL), and application deployment behind kamal-proxy.
 15. **Print deployment summary** -- Outputs commit SHA, image tag, application URL, and health check URL to the step summary.
 
@@ -364,20 +364,34 @@ KAMAL_REGISTRY_PASSWORD=$KAMAL_REGISTRY_PASSWORD
 POSTGRES_USER=$POSTGRES_USER                       # only if db_enabled
 POSTGRES_PASSWORD=$POSTGRES_PASSWORD                 # only if db_enabled
 DATABASE_URL=$DATABASE_URL                           # only if db_enabled
-# Any KAMAL_-prefixed GitHub secrets appear here with prefix stripped:
-# CUSTOM_VAR=$CUSTOM_VAR
+# Custom secrets from KAMAL_SECRETS appear here:
+# REDIS_URL=$REDIS_URL
 ```
 
 All entries use `$VAR` references that Kamal resolves from the process environment at deploy time. No cleartext secrets are written to disk.
 
-**Custom environment variables via KAMAL_ prefix:**
+**Custom environment variables via KAMAL_SECRETS and KAMAL_VARS:**
 
-Users can pass additional environment variables to the application container by creating GitHub secrets or variables with the `KAMAL_` prefix. The prefix is stripped when mapping to the container:
+Users can pass additional environment variables to the application container through two consolidated entries in dotenv format:
 
-- **`KAMAL_`-prefixed GitHub Secrets** → added to `.kamal/secrets` and listed in `env.secret` (the container receives the secret value under the stripped name).
-- **`KAMAL_`-prefixed GitHub Variables** → added to `env.clear` in the Kamal config (the container receives the variable value under the stripped name).
+- **`KAMAL_SECRETS`** (GitHub Secret) → each key=value pair is added as a `$VAR` reference in `.kamal/secrets` and listed in `env.secret`. The container receives the secret value.
+- **`KAMAL_VARS`** (GitHub Variable) → each key=value pair is added to `env.clear` in the Kamal config. The container receives the variable value.
 
-Example: a GitHub secret named `KAMAL_REDIS_URL` with value `redis://...` results in the container receiving `REDIS_URL=redis://...` as a secret env var. A GitHub variable named `KAMAL_LOG_LEVEL` with value `debug` results in `LOG_LEVEL=debug` as a clear env var.
+Both use standard dotenv format (parsed by `python-dotenv`), supporting quoting, comments, and `=` in values.
+
+Example `KAMAL_SECRETS`:
+```
+REDIS_URL=redis://localhost:6379
+STRIPE_KEY=sk_live_xxx
+```
+The container receives `REDIS_URL` and `STRIPE_KEY` as secret env vars.
+
+Example `KAMAL_VARS`:
+```
+LOG_LEVEL=debug
+APP_ENV=production
+```
+The container receives `LOG_LEVEL` and `APP_ENV` as clear env vars.
 
 **Database environment variable contract** (when `db_enabled` is true):
 
@@ -403,7 +417,7 @@ A Flask web application that exercises all platform features:
 - **PostgreSQL CRUD**: A `notes` table for creating and listing text notes. Configuration via environment variables (`POSTGRES_HOST`, `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`). Only active when `DB_CONFIGURED` is true.
 - **Filesystem blob storage**: File uploads saved to the path specified by `BLOB_STORAGE_PATH` (default: `/data/blobs`), with timestamp-prefixed filenames. Works regardless of database configuration.
 - **Health check endpoint**: `GET /up` returns 200 OK when the database is not configured (web-only mode) or when `SELECT 1` succeeds. Returns 503 only when the database is configured but unreachable. This endpoint is used by kamal-proxy for health-based routing.
-- **Custom environment variables**: Displays `MY_VAR` and `MY_SECRET` values on the index page, demonstrating the `KAMAL_` prefix injection mechanism.
+- **Custom environment variables**: Displays `MY_VAR` and `MY_SECRET` values on the index page, demonstrating the `KAMAL_SECRETS`/`KAMAL_VARS` injection mechanism.
 - **HTTP request headers**: Displays all incoming HTTP request headers on the index page for debugging proxy behavior.
 
 **Dockerfile:** Based on `python:3.12-slim`. The CMD conditionally retries `init_db()` up to 30 times only when `POSTGRES_HOST` is set (to wait for the PostgreSQL accessory to become available), then always starts gunicorn with `exec` for proper signal handling. When no database is configured, gunicorn starts immediately without the init_db retry loop.
@@ -753,4 +767,4 @@ Two complementary test suites validate the system at different levels:
 
 - E2E tests use `github.repository_id` for resource naming, sharing the same namespace as production deployments. Running E2E tests will tear down any existing production deployment.
 - Each scenario takes 8-15 minutes (provisioning + Kamal deploy + verification + teardown). The "all" scenario may take 45-60 minutes.
-- The E2E workflow requires `KAMAL_MY_VAR` (variable) and `KAMAL_MY_SECRET` (secret) to be configured in the repository for environment variable verification.
+- The E2E workflow requires `KAMAL_VARS` (variable containing `MY_VAR=...`) and `KAMAL_SECRETS` (secret containing `MY_SECRET=...`) to be configured in the repository for environment variable verification.

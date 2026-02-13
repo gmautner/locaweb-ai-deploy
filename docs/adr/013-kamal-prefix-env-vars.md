@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted
+Superseded by [ADR-019](019-dotenv-kamal-secrets-vars.md)
 
 ## Context
 

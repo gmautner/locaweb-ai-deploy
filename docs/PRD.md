@@ -219,12 +219,12 @@ The following GitHub Actions secrets must be configured in the repository:
 | `POSTGRES_PASSWORD` | When `db_enabled` | PostgreSQL superuser password. Validated at workflow start; workflow fails fast if missing. |
 | `GITHUB_TOKEN` | Automatic | Provided automatically by GitHub Actions. Used for pushing container images to ghcr.io and for triggering workflows from the E2E test. |
 
-Additionally, the following `KAMAL_`-prefixed entries are used by the E2E test suite to verify custom environment variable injection:
+Additionally, the following consolidated entries provide custom container environment variables (in dotenv format):
 
 | Entry | Type | Description |
 |-------|------|-------------|
-| `KAMAL_MY_VAR` | Variable | Test variable; becomes `MY_VAR` in the container. |
-| `KAMAL_MY_SECRET` | Secret | Test secret; becomes `MY_SECRET` in the container. |
+| `KAMAL_VARS` | Variable | Dotenv-formatted key=value pairs for clear container env vars. E2E tests require `MY_VAR=...`. |
+| `KAMAL_SECRETS` | Secret | Dotenv-formatted key=value pairs for secret container env vars. E2E tests require `MY_SECRET=...`. |
 
 ---
 
@@ -278,7 +278,7 @@ locaweb-ai-deploy/
 |   |-- e2e_test.py                     E2E test orchestrator
 |   |-- build_config.py                 Build deployment config from inputs
 |   |-- generate_kamal_config.py        Generate Kamal deploy config
-|   |-- create_kamal_secrets.py         Create Kamal secrets + KAMAL_ prefix processing
+|   |-- create_kamal_secrets.py         Create Kamal secrets + dotenv env var processing
 |   `-- userdata/
 |       |-- web_vm.sh                   Cloud-init: fail2ban + format/mount blob disk
 |       |-- worker_vm.sh                Cloud-init: fail2ban
