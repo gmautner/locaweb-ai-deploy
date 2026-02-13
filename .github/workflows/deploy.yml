@@ -53,16 +53,16 @@ on:
           - 4xlarge
       blob_disk_size_gb:
         description: "Web blob disk size in GB"
-        required: false
-        default: "20"
+        type: number
+        default: 20
       workers_enabled:
         description: "Enable worker VMs"
         type: boolean
         default: false
       workers_replicas:
         description: "Number of worker replicas"
-        required: false
-        default: "1"
+        type: number
+        default: 1
       workers_cmd:
         description: "Command for worker containers"
         required: false
@@ -97,8 +97,8 @@ on:
           - 4xlarge
       db_disk_size_gb:
         description: "Database disk size in GB"
-        required: false
-        default: "20"
+        type: number
+        default: 20
       automatic_reboot:
         description: "Enable automatic reboot after unattended upgrades"
         type: boolean
