@@ -1,7 +1,7 @@
 # Product Requirements Document: locaweb-ai-deploy
 
 **Version:** 1.0
-**Date:** 2026-02-11
+**Date:** 2026-02-13
 **Status:** Draft
 
 ---
@@ -10,7 +10,7 @@
 
 `locaweb-ai-deploy` is a reusable GitHub Actions workflow that automates end-to-end deployment of web applications onto Locaweb Cloud, a CloudStack-based Infrastructure-as-a-Service (IaaS) platform. It provisions all required infrastructure -- virtual machines, networks, disks, public IPs, firewall rules, and snapshot policies -- and then deploys a containerized application using Kamal 2.
 
-The workflow is designed to be invoked by other repositories, providing a turnkey deployment layer that any application repository can adopt. During development, `workflow_dispatch` is used for direct triggering; the production goal is a callable/reusable workflow that external repos reference.
+The workflow is designed to be invoked by other repositories, providing a turnkey deployment layer that any application repository can adopt. Both `workflow_dispatch` (direct/internal) and `workflow_call` (reusable/cross-repo) triggers are supported, so any repo can reference the deploy and teardown workflows without duplicating infrastructure logic.
 
 The project eliminates the manual, error-prone process of provisioning cloud resources and configuring deployments by hand. A single workflow invocation produces a fully operational environment with zero-downtime deployment capabilities, persistent storage, and optional database and worker infrastructure.
 
@@ -20,7 +20,7 @@ A companion teardown workflow destroys all provisioned resources, and a test wor
 
 ## 2. Goals
 
-1. **Reusable workflow.** The deploy workflow must be designed as a reusable/callable GitHub Actions workflow that other repositories can invoke, providing deployment capabilities without requiring knowledge of the underlying infrastructure.
+1. **Reusable workflow.** The deploy and teardown workflows are reusable GitHub Actions workflows (`workflow_call`) that other repositories can invoke, providing deployment capabilities without requiring knowledge of the underlying infrastructure.
 
 2. **Single-action deployment.** A single workflow invocation should go from zero infrastructure to a running, publicly accessible web application.
 
@@ -187,7 +187,7 @@ GitHub Actions (workflow_dispatch)
 
 ## 7. Workflow Inputs
 
-The deploy workflow (`deploy.yml`) accepts the following inputs via `workflow_dispatch`:
+The deploy workflow (`deploy.yml`) accepts the following inputs via `workflow_dispatch` and `workflow_call`. When invoked via `workflow_call`, `choice` inputs become `string` (GitHub Actions limitation). Boolean and number types are shared as-is:
 
 | Input | Type | Default | Description |
 |-------|------|---------|-------------|
@@ -208,7 +208,7 @@ The deploy workflow (`deploy.yml`) accepts the following inputs via `workflow_di
 
 ## 8. Secrets Configuration
 
-The following GitHub Actions secrets must be configured in the repository:
+When using the workflows internally, the following secrets are configured in this repository. When calling from an external repository, each secret must be passed explicitly in the `secrets:` block of the caller workflow (cross-org `secrets: inherit` is not supported by GitHub Actions).
 
 | Secret | Required | Description |
 |--------|----------|-------------|
@@ -226,9 +226,69 @@ Additionally, the following consolidated entries provide custom container enviro
 | `KAMAL_VARS` | Variable | Dotenv-formatted key=value pairs for clear container env vars. E2E tests require `MY_VAR=...`. |
 | `KAMAL_SECRETS` | Secret | Dotenv-formatted key=value pairs for secret container env vars. E2E tests require `MY_SECRET=...`. |
 
+When called externally, `KAMAL_VARS` is passed as a workflow input (`kamal_vars`), and `KAMAL_SECRETS` is passed as a workflow secret. Internally, `KAMAL_VARS` falls back to the repository variable `vars.KAMAL_VARS` when the input is empty.
+
 ---
 
-## 9. Deployment Scenarios
+## 9. Cross-Repository Usage
+
+External repositories invoke the deploy and teardown workflows via `workflow_call`. The caller repository must:
+
+1. **Contain a Dockerfile** at the repository root (the application to deploy).
+2. **Configure secrets** in the caller repository's GitHub settings (CloudStack keys, SSH key, database credentials).
+3. **Create wrapper workflows** that reference the reusable workflows.
+
+### Caller deploy workflow example
+
+```yaml
+# .github/workflows/deploy.yml
+name: Deploy
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+  packages: write
+jobs:
+  deploy:
+    uses: gmautner/locaweb-ai-deploy/.github/workflows/deploy.yml@main
+    with:
+      zone: "ZP01"
+      domain: "myapp.example.com"
+      web_plan: "small"
+      db_enabled: true
+      db_plan: "medium"
+      kamal_vars: |-
+        APP_ENV=production
+    secrets:
+      CLOUDSTACK_API_KEY: ${{ secrets.CLOUDSTACK_API_KEY }}
+      CLOUDSTACK_SECRET_KEY: ${{ secrets.CLOUDSTACK_SECRET_KEY }}
+      SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+      POSTGRES_USER: ${{ secrets.POSTGRES_USER }}
+      POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+      KAMAL_SECRETS: |-
+        STRIPE_KEY=${{ secrets.STRIPE_KEY }}
+```
+
+### Caller teardown workflow example
+
+```yaml
+# .github/workflows/teardown.yml
+name: Teardown
+on:
+  workflow_dispatch:
+jobs:
+  teardown:
+    uses: gmautner/locaweb-ai-deploy/.github/workflows/teardown.yml@main
+    with:
+      zone: "ZP01"
+    secrets:
+      CLOUDSTACK_API_KEY: ${{ secrets.CLOUDSTACK_API_KEY }}
+      CLOUDSTACK_SECRET_KEY: ${{ secrets.CLOUDSTACK_SECRET_KEY }}
+```
+
+---
+
+## 10. Deployment Scenarios
 
 The system supports four deployment topologies, all controlled through workflow inputs:
 
@@ -258,7 +318,7 @@ The system supports four deployment topologies, all controlled through workflow 
 
 ---
 
-## 10. File Structure
+## 11. File Structure
 
 ```
 locaweb-ai-deploy/
@@ -291,20 +351,19 @@ locaweb-ai-deploy/
 
 ---
 
-## 11. TODOs
+## 12. TODOs
 
 Near-term, actionable items:
 
 - **IP filtering for SSH access.** Restrict firewall rules for SSH (port 22) to GitHub Actions runner IP ranges only, rather than `0.0.0.0/0`.
-- **TLS with Let's Encrypt.** Enable kamal-proxy SSL termination with Let's Encrypt certificates once custom domain support is implemented.
 
 ---
 
-## 12. Future Considerations
+## 13. Future Considerations
 
 Longer-term directions under consideration:
 
-- **Custom domain support.** The `domain` workflow input is reserved for future implementation of custom domain routing, TLS certificate provisioning, and DNS record management.
+- ~~**Custom domain support.**~~ Implemented: the `domain` workflow input enables custom domain routing with automatic TLS via Let's Encrypt.
 - **Monitoring and alerting.** Integrate application and infrastructure monitoring (metrics, logs, alerts) into the deployment workflow.
 - **Multi-environment support.** Enable staging/production environment separation with distinct resource naming and network isolation.
 - ~~**Disaster recovery automation.**~~ Implemented: the `recover` workflow input enables recovery from snapshots (same-zone; cross-zone pending Locaweb Cloud support for `copySnapshot`).

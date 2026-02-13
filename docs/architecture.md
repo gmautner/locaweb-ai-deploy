@@ -1,7 +1,7 @@
 # Architecture Design Document -- locaweb-ai-deploy
 
 **Status:** Living document
-**Last updated:** 2026-02-11
+**Last updated:** 2026-02-13
 
 ---
 
@@ -23,7 +23,7 @@
 
 `locaweb-ai-deploy` automates end-to-end deployment of containerized web applications onto Locaweb Cloud, a CloudStack-based IaaS platform. The system uses GitHub Actions as its orchestration layer and Kamal 2 as its container deployment tool.
 
-A single `workflow_dispatch` trigger provisions virtual machines, networking, storage, and firewall rules on CloudStack, then builds a Docker image, pushes it to the GitHub Container Registry (ghcr.io), and deploys the application via SSH using Kamal's zero-downtime deployment model.
+The deploy and teardown workflows support dual triggers: `workflow_dispatch` for direct use, and `workflow_call` for invocation by external repositories. This makes the system a reusable deployment platform — any application repository can reference the workflows without duplicating infrastructure logic. A dual checkout pattern retrieves the caller's application code alongside the infrastructure scripts from this repository.
 
 ### Goals
 
@@ -100,13 +100,19 @@ Examples:
 
 ### 1. GitHub Actions Workflows
 
-Four workflow files orchestrate the system. All are triggered by `workflow_dispatch` (manual trigger).
+Four workflow files orchestrate the system. The deploy and teardown workflows support dual triggers: `workflow_dispatch` (manual/internal) and `workflow_call` (reusable/cross-repo). The test workflows use `workflow_dispatch` only.
 
 #### deploy.yml
 
-A single-job workflow that provisions infrastructure and deploys the application sequentially. The job runs on `ubuntu-latest` and requires `contents: read` and `packages: write` permissions (the latter for ghcr.io image pushes).
+A single-job reusable workflow that provisions infrastructure and deploys the application sequentially. The job runs on `ubuntu-latest` and requires `contents: read` and `packages: write` permissions (the latter for ghcr.io image pushes).
+
+**Triggers:** `workflow_dispatch` for direct use and `workflow_call` for invocation by external repositories. Both triggers accept the same inputs, though `workflow_call` uses `type: string` where `workflow_dispatch` uses `type: choice` (unsupported by `workflow_call`). Boolean and number types are shared as-is.
+
+**Dual checkout:** The workflow performs two checkouts: (1) `actions/checkout@v4` retrieves the caller's application code (Dockerfile, source), and (2) a second checkout retrieves infrastructure scripts from `gmautner/locaweb-ai-deploy` into `_infra/`. All script paths use `_infra/scripts/` prefixes. In internal mode, the first checkout gets this repository itself and the second is redundant but harmless.
 
 **Concurrency:** Shares a concurrency group (`deploy-${{ github.repository }}`) with `teardown.yml` to prevent overlapping infrastructure operations. `cancel-in-progress` is false so queued runs wait rather than cancel.
+
+**Workflow outputs** (exposed to callers): `web_ip`, `worker_ips`, `db_ip`, `db_internal_ip`.
 
 **Workflow inputs** (all configurable at dispatch time):
 
@@ -128,7 +134,8 @@ A single-job workflow that provisions infrastructure and deploys the application
 **Step sequence:**
 
 1. **Validate secrets** -- If `db_enabled` is true, verifies that `POSTGRES_USER` and `POSTGRES_PASSWORD` secrets exist. Fails fast if missing.
-2. **Checkout repository** -- Standard `actions/checkout@v4`.
+2. **Checkout application repository** -- `actions/checkout@v4` retrieves the caller's code (or this repo in internal mode).
+2b. **Checkout infrastructure scripts** -- `actions/checkout@v4` with `repository: gmautner/locaweb-ai-deploy` and `path: _infra`.
 3. **Build configuration** -- Inline Python assembles workflow inputs into a JSON config file at `/tmp/config.json`.
 4. **Extract SSH public key** -- Derives the public key from the `SSH_PRIVATE_KEY` secret using `ssh-keygen -y`.
 5. **Install CloudMonkey** -- Downloads the `cmk` binary, configures it with the CloudStack API endpoint (`painel-cloud.locaweb.com.br`), API key, and secret key. Runs `cmk sync` to populate the local API cache.
@@ -145,7 +152,9 @@ A single-job workflow that provisions infrastructure and deploys the application
 
 #### teardown.yml
 
-Destroys all CloudStack resources in reverse creation order. Uses the same CloudMonkey installation pattern as the deploy workflow. Shares the `deploy-${{ github.repository }}` concurrency group with `deploy.yml`.
+A reusable workflow that destroys all CloudStack resources in reverse creation order. Supports both `workflow_dispatch` and `workflow_call` triggers. Uses the same CloudMonkey installation pattern as the deploy workflow. Shares the `deploy-${{ github.repository }}` concurrency group with `deploy.yml`.
+
+**Dual checkout:** Unlike deploy.yml, the teardown workflow only needs the infrastructure scripts (no application code), so it performs a single checkout of `gmautner/locaweb-ai-deploy` into `_infra/`.
 
 **Workflow inputs:**
 
@@ -485,11 +494,13 @@ The web VM mounts at `/data/blobs`, the DB VM mounts at `/data/db`. The worker s
 ### Deployment data flow
 
 ```
-1. User triggers workflow_dispatch
+1. Workflow triggered (workflow_dispatch or workflow_call from caller repo)
    |
    v
 2. GitHub Actions runner starts (ubuntu-latest)
    |
+   +-- Checks out caller's application code (Dockerfile, source)
+   +-- Checks out infrastructure scripts into _infra/
    +-- Assembles JSON config from workflow inputs
    +-- Extracts SSH public key from private key secret
    +-- Installs and configures CloudMonkey (cmk)
