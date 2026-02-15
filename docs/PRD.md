@@ -223,10 +223,10 @@ Additionally, the following consolidated entries provide custom container enviro
 
 | Entry | Type | Description |
 |-------|------|-------------|
-| `KAMAL_VARS` | Variable | Dotenv-formatted key=value pairs for clear container env vars. E2E tests require `MY_VAR=...`. |
-| `KAMAL_SECRETS` | Secret | Dotenv-formatted key=value pairs for secret container env vars. E2E tests require `MY_SECRET=...`. |
+| `ENV_VARS` | Variable | Dotenv-formatted key=value pairs for clear container env vars. E2E tests require `MY_VAR=...`. |
+| `SECRET_ENV_VARS` | Secret | Dotenv-formatted key=value pairs for secret container env vars. E2E tests require `MY_SECRET=...`. |
 
-When called externally, `KAMAL_VARS` is passed as a workflow input (`kamal_vars`), and `KAMAL_SECRETS` is passed as a workflow secret. Internally, `KAMAL_VARS` falls back to the repository variable `vars.KAMAL_VARS` when the input is empty.
+When called externally, `ENV_VARS` is passed as a workflow input (`env_vars`), and `SECRET_ENV_VARS` is passed as a workflow secret. Internally, `ENV_VARS` falls back to the repository variable `vars.ENV_VARS` when the input is empty.
 
 ---
 
@@ -257,7 +257,7 @@ jobs:
       web_plan: "small"
       db_enabled: true
       db_plan: "medium"
-      kamal_vars: |-
+      env_vars: |-
         APP_ENV=production
     secrets:
       CLOUDSTACK_API_KEY: ${{ secrets.CLOUDSTACK_API_KEY }}
@@ -265,7 +265,7 @@ jobs:
       SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
       POSTGRES_USER: ${{ secrets.POSTGRES_USER }}
       POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
-      KAMAL_SECRETS: |-
+      SECRET_ENV_VARS: |-
         STRIPE_KEY=${{ secrets.STRIPE_KEY }}
 ```
 

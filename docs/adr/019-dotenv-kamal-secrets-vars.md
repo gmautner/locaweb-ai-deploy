@@ -19,16 +19,16 @@ The deploy workflow is being prepared as a reusable workflow that external repos
 
 Replace the individual `KAMAL_`-prefixed GitHub secrets and variables with two consolidated entries:
 
-- **`KAMAL_SECRETS`** (GitHub Secret) — dotenv-formatted key=value pairs for secret container env vars.
-- **`KAMAL_VARS`** (GitHub Variable) — dotenv-formatted key=value pairs for clear container env vars.
+- **`SECRET_ENV_VARS`** (GitHub Secret) — dotenv-formatted key=value pairs for secret container env vars.
+- **`ENV_VARS`** (GitHub Variable) — dotenv-formatted key=value pairs for clear container env vars.
 
-Example `KAMAL_SECRETS`:
+Example `SECRET_ENV_VARS`:
 ```
 REDIS_URL=redis://localhost:6379
 STRIPE_KEY=sk_live_xxx
 ```
 
-Example `KAMAL_VARS`:
+Example `ENV_VARS`:
 ```
 APP_ENV=production
 LOG_LEVEL=info
@@ -36,7 +36,7 @@ LOG_LEVEL=info
 
 Parsing uses the `python-dotenv` library, which follows standard dotenv conventions (quoting, comments, escaping) and matches the format Kamal itself uses for `.kamal/secrets` via the Ruby `dotenv` gem.
 
-When the workflow is invoked externally via `workflow_call`, the caller passes `KAMAL_SECRETS` as a declared secret and `kamal_vars` as a declared input. Internally, the workflow reads from `secrets.KAMAL_SECRETS` and `vars.KAMAL_VARS` respectively, with a fallback expression (`inputs.kamal_vars || vars.KAMAL_VARS`) to support both invocation modes.
+When the workflow is invoked externally via `workflow_call`, the caller passes `SECRET_ENV_VARS` as a declared secret and `env_vars` as a declared input. Internally, the workflow reads from `secrets.SECRET_ENV_VARS` and `vars.ENV_VARS` respectively, with a fallback expression (`inputs.env_vars || vars.ENV_VARS`) to support both invocation modes.
 
 ## Consequences
 

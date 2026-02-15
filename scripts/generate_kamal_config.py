@@ -12,8 +12,8 @@ Reads from environment:
 
 Reads from files:
   /tmp/provision-output.json      - Provisioning output (IPs, etc.)
-  /tmp/kamal_custom_vars.json     - Custom clear env vars from KAMAL_VARS
-  /tmp/kamal_custom_secrets.json  - Custom secret env var names from KAMAL_SECRETS
+  /tmp/kamal_custom_vars.json     - Custom clear env vars from ENV_VARS
+  /tmp/kamal_custom_secrets.json  - Custom secret env var names from SECRET_ENV_VARS
 
 Outputs:
   config/deploy.yml - Kamal deployment configuration
@@ -120,7 +120,7 @@ if db_enabled:
         },
     }
 
-# Merge custom variables and secrets from KAMAL_VARS / KAMAL_SECRETS
+# Merge custom variables and secrets from ENV_VARS / SECRET_ENV_VARS
 custom_vars = json.load(open('/tmp/kamal_custom_vars.json'))
 custom_secrets = json.load(open('/tmp/kamal_custom_secrets.json'))
 for k, v in custom_vars.items():

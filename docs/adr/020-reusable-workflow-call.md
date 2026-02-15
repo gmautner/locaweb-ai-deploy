@@ -44,18 +44,18 @@ Both triggers support `type: boolean` and `type: number`, so these are shared as
 
 Secrets are declared explicitly in the `workflow_call` block. External callers must pass each secret individually — `secrets: inherit` only works within the same GitHub organization.
 
-### KAMAL_VARS fallback
+### ENV_VARS fallback
 
-The `KAMAL_VARS` input uses a fallback expression to support both invocation modes:
+The `ENV_VARS` input uses a fallback expression to support both invocation modes:
 
 ```yaml
-KAMAL_VARS: ${{ inputs.kamal_vars || vars.KAMAL_VARS }}
+ENV_VARS: ${{ inputs.env_vars || vars.ENV_VARS }}
 ```
 
-- External callers pass `kamal_vars` as a workflow input.
-- Internal runs leave the input empty, falling back to the repository variable `vars.KAMAL_VARS`.
+- External callers pass `env_vars` as a workflow input.
+- Internal runs leave the input empty, falling back to the repository variable `vars.ENV_VARS`.
 
-`KAMAL_SECRETS` needs no fallback because the `secrets` context is unified — it works the same whether secrets come from the caller or from the repository.
+`SECRET_ENV_VARS` needs no fallback because the `secrets` context is unified — it works the same whether secrets come from the caller or from the repository.
 
 ### Workflow outputs
 
@@ -98,7 +98,7 @@ jobs:
       web_plan: "small"
       db_enabled: true
       db_plan: "medium"
-      kamal_vars: |-
+      env_vars: |-
         APP_ENV=production
         LOG_LEVEL=info
     secrets:
@@ -107,6 +107,6 @@ jobs:
       SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
       POSTGRES_USER: ${{ secrets.POSTGRES_USER }}
       POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
-      KAMAL_SECRETS: |-
+      SECRET_ENV_VARS: |-
         STRIPE_KEY=${{ secrets.STRIPE_KEY }}
 ```

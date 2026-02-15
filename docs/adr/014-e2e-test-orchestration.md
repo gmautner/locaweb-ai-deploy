@@ -47,4 +47,4 @@ The sample app was also updated to degrade gracefully without a database (`DB_CO
 - E2E tests are slow: 8-15 minutes per scenario due to CloudStack provisioning and Kamal deployment.
 - E2E tests share the production resource namespace (`github.repository_id`), so running them tears down any existing production deployment.
 - The workflow triggering pattern (poll for new run ID) has a race window if multiple runs are triggered simultaneously, though the concurrency group prevents this in practice.
-- Requires `KAMAL_VARS` (variable with `MY_VAR=...`) and `KAMAL_SECRETS` (secret with `MY_SECRET=...`) to be configured for environment variable verification tests.
+- Requires `ENV_VARS` (variable with `MY_VAR=...`) and `SECRET_ENV_VARS` (secret with `MY_SECRET=...`) to be configured for environment variable verification tests.

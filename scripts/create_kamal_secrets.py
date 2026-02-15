@@ -2,8 +2,8 @@
 """Create .kamal/secrets and process custom container env vars.
 
 Reads from environment:
-  KAMAL_SECRETS    - dotenv-formatted secret container env vars
-  KAMAL_VARS       - dotenv-formatted clear container env vars
+  SECRET_ENV_VARS    - dotenv-formatted secret container env vars
+  ENV_VARS       - dotenv-formatted clear container env vars
   INPUT_DB_ENABLED - Whether database is enabled
 
 Outputs:
@@ -20,8 +20,8 @@ from io import StringIO
 from dotenv import dotenv_values
 
 db_enabled = os.environ.get('INPUT_DB_ENABLED') == 'true'
-custom_secrets = dict(dotenv_values(stream=StringIO(os.environ.get('KAMAL_SECRETS', ''))))
-custom_vars = dict(dotenv_values(stream=StringIO(os.environ.get('KAMAL_VARS', ''))))
+custom_secrets = dict(dotenv_values(stream=StringIO(os.environ.get('SECRET_ENV_VARS', ''))))
+custom_vars = dict(dotenv_values(stream=StringIO(os.environ.get('ENV_VARS', ''))))
 
 # Build .kamal/secrets with $VAR references (no cleartext values)
 lines = [

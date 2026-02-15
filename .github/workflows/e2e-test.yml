@@ -15,8 +15,8 @@
 #   ROUTE_53_AWS_SECRET_ACCESS_KEY  - AWS secret key for Route53 DNS management
 #
 # Required GitHub Variables/Secrets (dotenv format):
-#   KAMAL_VARS (variable)   - must contain MY_VAR=... (becomes MY_VAR in container)
-#   KAMAL_SECRETS (secret)  - must contain MY_SECRET=... (becomes MY_SECRET in container)
+#   ENV_VARS (variable)   - must contain MY_VAR=... (becomes MY_VAR in container)
+#   SECRET_ENV_VARS (secret)  - must contain MY_SECRET=... (becomes MY_SECRET in container)
 
 name: E2E Test
 

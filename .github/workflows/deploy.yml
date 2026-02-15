@@ -10,8 +10,8 @@
 #   POSTGRES_PASSWORD     - PostgreSQL password (if db_enabled)
 #
 # Optional custom container env vars (dotenv format):
-#   KAMAL_SECRETS (secret)   - key=value pairs passed as secret env vars to the container
-#   KAMAL_VARS (variable)    - key=value pairs passed as clear env vars to the container
+#   SECRET_ENV_VARS (secret)   - key=value pairs passed as secret env vars to the container
+#   ENV_VARS (variable)    - key=value pairs passed as clear env vars to the container
 #
 # Note: GITHUB_TOKEN is used for ghcr.io registry access (no separate REGISTRY_TOKEN needed).
 
@@ -156,7 +156,7 @@ on:
       automatic_reboot_time_utc:
         type: string
         default: "05:00"
-      kamal_vars:
+      env_vars:
         type: string
         default: ""
         description: "Dotenv-formatted key=value pairs for clear container env vars"
@@ -171,7 +171,7 @@ on:
         required: false
       POSTGRES_PASSWORD:
         required: false
-      KAMAL_SECRETS:
+      SECRET_ENV_VARS:
         required: false
     outputs:
       web_ip:
@@ -332,8 +332,8 @@ jobs:
 
       - name: Create Kamal secrets and env vars
         env:
-          KAMAL_SECRETS: ${{ secrets.KAMAL_SECRETS }}
-          KAMAL_VARS: ${{ inputs.kamal_vars || vars.KAMAL_VARS }}
+          SECRET_ENV_VARS: ${{ secrets.SECRET_ENV_VARS }}
+          ENV_VARS: ${{ inputs.env_vars || vars.ENV_VARS }}
           INPUT_DB_ENABLED: ${{ inputs.db_enabled }}
         run: |
           pip install -q python-dotenv
