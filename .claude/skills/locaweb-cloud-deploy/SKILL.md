@@ -15,6 +15,20 @@ description: >
 
 Deploy web applications to Locaweb Cloud by calling reusable workflows from `gmautner/locaweb-ai-deploy`. The platform provisions CloudStack VMs, networks, disks, and firewall rules, then deploys containers via Kamal 2 with zero-downtime proxy.
 
+## Platform Constraints (Read First)
+
+These constraints apply to **every** application deployed to this platform. Communicate these upfront when starting any deployment work:
+
+- **Single Dockerfile at repo root**, web app **must listen on port 80**
+- **Health check at `GET /up`** returning HTTP 200 when healthy
+- **Postgres only**: No Redis, Kafka, or other services. Use Postgres for queues (`SKIP LOCKED`), pub/sub (`LISTEN`/`NOTIFY`), job scheduling, caching, and any other patterns. If the app framework expects Redis or similar, find or implement a Postgres-backed alternative.
+- **Single web VM**: No horizontal web scaling. Scale vertically with larger `web_plan`. Prefer runtimes and frameworks that scale well vertically.
+- **No TLS without a domain**: nip.io URLs are HTTP only. Use a custom domain for HTTPS.
+- **Single PostgreSQL instance**: No read replicas or multiple databases.
+- **Workers use the same Docker image** with a different command (`workers_cmd`).
+
+If the application's current design conflicts with any of these (e.g., depends on Redis, listens on port 3000, uses multiple Dockerfiles), resolve the conflict **before** proceeding with deployment setup.
+
 ## Workflow Overview
 
 ```
@@ -29,15 +43,76 @@ Caller repo                          gmautner/locaweb-ai-deploy
 +-----------------------+
 ```
 
-## Quick Start: First Deployment
+## Setup Procedure
 
-Follow this sequence for a new repository:
+Follow these steps in order. Each step is idempotent -- safe to re-run across agent sessions. See [references/setup-and-deploy.md](references/setup-and-deploy.md) for detailed commands and procedures for each step.
 
-1. **Prepare the application** (Dockerfile + health check) -- see [Dockerfile Requirements](#dockerfile-requirements)
-2. **Configure GitHub repo secrets** -- see [Secrets Setup](#secrets-setup)
-3. **Create a preview deploy workflow** (no domain, triggered on push) -- see [references/workflows.md](references/workflows.md)
-4. **Push and verify** via the nip.io URL from workflow outputs
-5. **When mature, add a production workflow** with a custom domain -- see [references/workflows.md](references/workflows.md)
+### Step 1: Prepare the application
+
+- Ensure a single `Dockerfile` at repo root, listening on port 80
+- Implement `GET /up` health check returning 200
+- If using a database: read connection from `POSTGRES_HOST`, `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`, `DATABASE_URL`. The app **must fail clearly** (not silently degrade) if these vars are expected but missing.
+- If using workers: ensure the same Docker image supports a separate command for the worker process
+
+### Step 2: Set up the GitHub repository
+
+- Check if a git remote is configured (`git remote -v`)
+- If no remote: ask the user whether to use an existing GitHub repo or create a new one
+  - Existing repo: ask for the URL, add as remote
+  - New repo: create with `gh repo create`
+
+### Step 3: Generate SSH key
+
+- If `~/.ssh/<repo-name>` already exists, skip generation and reuse the existing key
+- Otherwise, generate an Ed25519 SSH key locally at `~/.ssh/<repo-name>` with no passphrase
+- Set permissions to 0600
+
+### Step 4: Collect CloudStack credentials
+
+- Check if `CLOUDSTACK_API_KEY` and `CLOUDSTACK_SECRET_KEY` are already set in the repo (`gh secret list`)
+- If not set: ask the user to provide them
+
+### Step 5: Set up Postgres credentials
+
+- Check if `POSTGRES_USER` and `POSTGRES_PASSWORD` are already set in the repo (`gh secret list`)
+- If not set: choose a `POSTGRES_USER` (e.g., `myapp_user`) and generate a random password for each environment
+- Use suffixed secret names per environment: `POSTGRES_USER`/`POSTGRES_PASSWORD` for preview, `POSTGRES_USER_PROD`/`POSTGRES_PASSWORD_PROD` for production
+
+### Step 6: Create GitHub secrets
+
+- Use `gh secret list` to check which secrets already exist in the repo
+- Only create secrets that are missing: `CLOUDSTACK_API_KEY`, `CLOUDSTACK_SECRET_KEY`, `SSH_PRIVATE_KEY` (from the generated key), `POSTGRES_USER`, `POSTGRES_PASSWORD` (if database is enabled)
+- If the app has custom env vars or secrets, create `SECRET_ENV_VARS` and configure `ENV_VARS` via `gh variable set`
+
+### Step 7: Create caller workflows
+
+- Start with a preview deploy workflow (triggered on push, no domain)
+- Create matching teardown workflow
+- See [references/workflows.md](references/workflows.md) for templates and input reference
+
+### Step 8: Add production environment (when ready)
+
+- Suggest the user for authorization to create a production environment when ready
+- Create a production deploy workflow (triggered on `v*` tags, with custom domain)
+- See [DNS Configuration](#dns-configuration-for-custom-domains) for the domain setup procedure
+- Use separate Postgres credentials for production
+
+## Development Routine
+
+After setup is complete, use this cycle to deploy and iterate on the application. See [references/setup-and-deploy.md](references/setup-and-deploy.md) for detailed commands.
+
+### Commit, push, and deploy
+
+- Commit and push. Follow the GitHub Actions workflow run.
+- If the workflow fails: read the error from the run logs, fix the issue, commit/push, repeat
+- Continue until the workflow succeeds
+
+### Verify the running application
+
+- Browse the app at `http://<web_ip>.nip.io` (get `web_ip` from the workflow run summary)
+- Use Playwright for browser-based verification (see [references/setup-and-deploy.md](references/setup-and-deploy.md) for setup)
+- If the app doesn't work: SSH into the VMs to check logs (use the locally saved SSH key and the public IPs from the workflow output), diagnose, fix source code, commit/push, and repeat the deploy cycle
+- Continue until the app works correctly
 
 ## Dockerfile Requirements
 
@@ -45,8 +120,8 @@ Follow this sequence for a new repository:
 - Web app **must listen on port 80** (hardcoded in platform proxy config)
 - Default `CMD`/entrypoint serves the web application
 - If using workers, the same image must support a separate command passed via `workers_cmd` input
-- Health check endpoint at `GET /up` returning HTTP 200 when healthy; return 200 even when database is not configured (check if `POSTGRES_HOST` env var is empty/absent)
-- If connecting to a database, read connection from env vars: `POSTGRES_HOST`, `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`, `DATABASE_URL`
+- Health check endpoint at `GET /up` returning HTTP 200 when healthy
+- If connecting to a database, read connection from env vars: `POSTGRES_HOST`, `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`, `DATABASE_URL`. The app must **fail with a clear error** if it needs the database but these variables are missing -- do not silently skip database functionality.
 
 Example minimal Dockerfile:
 
@@ -59,49 +134,6 @@ COPY . .
 EXPOSE 80
 CMD ["gunicorn", "--bind", "0.0.0.0:80", "--workers", "2", "app:app"]
 ```
-
-## Secrets Setup
-
-Configure these in the caller repository's GitHub Settings > Secrets and variables > Actions.
-
-### Mandatory secrets (always required)
-
-| Secret | Description | How to generate |
-|--------|-------------|-----------------|
-| `CLOUDSTACK_API_KEY` | CloudStack API key | Provided by Locaweb Cloud account admin |
-| `CLOUDSTACK_SECRET_KEY` | CloudStack secret key | Provided by Locaweb Cloud account admin |
-| `SSH_PRIVATE_KEY` | Ed25519 SSH private key for VM access | See command below |
-
-Generate the SSH key:
-
-```bash
-ssh-keygen -t ed25519 -f locaweb-deploy-key -N "" -C "locaweb-deploy"
-# Copy the ENTIRE contents of locaweb-deploy-key (private key) into the SSH_PRIVATE_KEY secret
-# The public key is derived automatically at deploy time
-```
-
-### Database secrets (required when `db_enabled: true`)
-
-| Secret | Description | Notes |
-|--------|-------------|-------|
-| `POSTGRES_USER` | PostgreSQL username | e.g. `myapp_user` |
-| `POSTGRES_PASSWORD` | PostgreSQL password | Generate a strong random password |
-
-**Use different passwords for different environments.** Generate random passwords:
-
-```bash
-# Generate a 32-character random password
-openssl rand -base64 32
-```
-
-If deploying multiple environments (preview + production), use suffixed secrets:
-- `POSTGRES_USER` / `POSTGRES_PASSWORD` for preview
-- `POSTGRES_USER_PROD` / `POSTGRES_PASSWORD_PROD` for production
-- Pass the correct one in each workflow's `secrets:` block
-
-### Custom environment variables
-
-See [references/env-vars.md](references/env-vars.md) for detailed configuration of application env vars and secrets.
 
 ## Deployment Outputs and URLs
 
@@ -141,14 +173,6 @@ See [references/scaling.md](references/scaling.md) for VM plans, worker scaling,
 
 See [references/teardown.md](references/teardown.md) for tearing down environments, inferring zone/env_name from existing workflows, and reading last run outputs.
 
-## Platform Constraints
-
-- **Postgres only**: No Redis, Kafka, or other services. Use Postgres for queues (e.g., `SKIP LOCKED` pattern), pub/sub (`LISTEN`/`NOTIFY`), job scheduling, caching, and any other patterns. If the application framework expects Redis or similar, find a Postgres-backed alternative or implement the pattern directly on Postgres. Search the web or use specialized skills for Postgres-based alternatives to Redis, Kafka, etc.
-- **Single web VM**: No horizontal web scaling. Scale vertically with larger `web_plan`.
-- **No TLS without a domain**: nip.io URLs are HTTP only. Use a custom domain for HTTPS.
-- **Single PostgreSQL instance**: No read replicas or multiple databases.
-- **No cron/scheduled jobs**: Use Postgres-based scheduling or the worker process to poll.
-
 ## Development Cycle Without Local Environment
 
 When the developer cannot run the language runtime or database locally:
@@ -162,6 +186,7 @@ When the developer cannot run the language runtime or database locally:
 
 ## References
 
+- **[references/setup-and-deploy.md](references/setup-and-deploy.md)** -- Detailed commands for each setup step, development routine, and SSH debugging
 - **[references/workflows.md](references/workflows.md)** -- Complete caller workflow examples (deploy + teardown) with all inputs documented
 - **[references/env-vars.md](references/env-vars.md)** -- Environment variables and secrets configuration
 - **[references/scaling.md](references/scaling.md)** -- VM plans, worker scaling, disk sizes
