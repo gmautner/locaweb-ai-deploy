@@ -22,12 +22,16 @@ permissions:
   packages: write
 
 concurrency:
-  group: deploy-${{ github.repository }}
+  group: deploy-${{ github.repository }}-${{ inputs.env_name || 'preview' }}
   cancel-in-progress: false
 
 on:
   workflow_dispatch:
     inputs:
+      env_name:
+        description: "Environment name (e.g. preview, staging, production)"
+        required: false
+        default: "preview"
       zone:
         description: "CloudStack zone"
         type: choice
@@ -114,6 +118,9 @@ on:
 
   workflow_call:
     inputs:
+      env_name:
+        type: string
+        default: "preview"
       zone:
         type: string
         default: "ZP01"
@@ -270,6 +277,7 @@ jobs:
           python3 -u _infra/scripts/provision_infrastructure.py \
             --repo-name "${{ github.event.repository.name }}" \
             --unique-id "${{ github.repository_id }}" \
+            --env-name "${{ inputs.env_name || 'preview' }}" \
             --config /tmp/config.json \
             --public-key /tmp/ssh_key.pub \
             --output /tmp/provision-output.json \

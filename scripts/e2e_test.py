@@ -39,7 +39,11 @@ REPO_ID = os.environ.get("REPO_ID", "")
 ZONE = os.environ.get("ZONE", "ZP01")
 SCENARIO = os.environ.get("SCENARIO", "all")
 SSH_KEY_PATH = os.environ.get("SSH_KEY_PATH", "/tmp/ssh_key")
-NETWORK_NAME = f"{REPO_NAME}-{REPO_ID}"
+DEFAULT_ENV_NAME = "preview"
+
+
+def make_network_name(env_name=DEFAULT_ENV_NAME):
+    return f"{REPO_NAME}-{REPO_ID}-{env_name}"
 
 RESULTS_PATH = "/tmp/e2e-test-results.json"
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -257,10 +261,13 @@ def trigger_deploy(inputs):
         return json.load(f)
 
 
-def trigger_teardown():
+def trigger_teardown(env_name=DEFAULT_ENV_NAME):
     """Trigger teardown.yml and wait for completion."""
     print("\n  --- Triggering teardown workflow ---")
-    run_id = trigger_workflow("teardown.yml", {"zone": ZONE})
+    run_id = trigger_workflow("teardown.yml", {
+        "zone": ZONE,
+        "env_name": env_name,
+    })
     wait_for_run(run_id)
     print("  Teardown complete")
 
@@ -659,6 +666,7 @@ class E2ETestRunner:
             # Deploy
             output = trigger_deploy({
                 "zone": ZONE,
+                "env_name": DEFAULT_ENV_NAME,
                 "workers_enabled": "true",
                 "workers_replicas": "1",
                 "db_enabled": "true",
@@ -787,7 +795,7 @@ class E2ETestRunner:
                                    f"fail2ban findtime=600 on {label}")
 
             # Teardown
-            trigger_teardown()
+            trigger_teardown(DEFAULT_ENV_NAME)
 
         self.scenarios.append(s)
 
@@ -803,6 +811,7 @@ class E2ETestRunner:
             # Deploy with custom domain (no workers, no db), reboot disabled
             output = trigger_deploy({
                 "zone": ZONE,
+                "env_name": DEFAULT_ENV_NAME,
                 "domain": domain,
                 "automatic_reboot": "false",
             })
@@ -902,7 +911,7 @@ class E2ETestRunner:
                            "fail2ban findtime=600 on web")
 
             # Teardown
-            trigger_teardown()
+            trigger_teardown(DEFAULT_ENV_NAME)
 
         # Clean up DNS record (outside the with block so it runs even on failure)
         if domain_ip:
@@ -920,6 +929,7 @@ class E2ETestRunner:
             # Deploy with 1 worker, small plans, smaller disks
             output = trigger_deploy({
                 "zone": ZONE,
+                "env_name": "e2etest",
                 "web_plan": "small",
                 "workers_enabled": "true",
                 "workers_replicas": "1",
@@ -991,6 +1001,7 @@ class E2ETestRunner:
             # Scale up: 3 workers, medium plans, larger disks
             output2 = trigger_deploy({
                 "zone": ZONE,
+                "env_name": "e2etest",
                 "web_plan": "medium",
                 "workers_enabled": "true",
                 "workers_replicas": "3",
@@ -1067,7 +1078,7 @@ class E2ETestRunner:
                     f"Automatic reboot at 05:00 on {label} (after scale)")
 
             # Teardown
-            trigger_teardown()
+            trigger_teardown("e2etest")
 
         self.scenarios.append(s)
 
@@ -1081,6 +1092,7 @@ class E2ETestRunner:
             # Deploy with 3 workers
             output = trigger_deploy({
                 "zone": ZONE,
+                "env_name": DEFAULT_ENV_NAME,
                 "workers_enabled": "true",
                 "workers_replicas": "3",
                 "db_enabled": "true",
@@ -1108,6 +1120,7 @@ class E2ETestRunner:
             # Scale down to 1 worker
             output2 = trigger_deploy({
                 "zone": ZONE,
+                "env_name": DEFAULT_ENV_NAME,
                 "workers_enabled": "true",
                 "workers_replicas": "1",
                 "db_enabled": "true",
@@ -1138,7 +1151,7 @@ class E2ETestRunner:
                 "HTTP /up returns 200 (after scale down)")
 
             # Teardown
-            trigger_teardown()
+            trigger_teardown(DEFAULT_ENV_NAME)
 
         self.scenarios.append(s)
 
@@ -1153,7 +1166,8 @@ def main():
     print(f"# Repository: {REPO_FULL}")
     print(f"# Zone:       {ZONE}")
     print(f"# Scenario:   {SCENARIO}")
-    print(f"# Network:    {NETWORK_NAME}")
+    print(f"# Network:    {make_network_name(DEFAULT_ENV_NAME)} (default)")
+    print(f"#             {make_network_name('e2etest')} (scale-up)")
     print(f"{'#' * 60}")
 
     runner = E2ETestRunner()

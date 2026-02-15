@@ -191,6 +191,7 @@ The deploy workflow (`deploy.yml`) accepts the following inputs via `workflow_di
 
 | Input | Type | Default | Description |
 |-------|------|---------|-------------|
+| `env_name` | string | `preview` | Environment name for resource isolation (e.g., preview, staging, production). |
 | `zone` | choice | -- | CloudStack zone: `ZP01` or `ZP02`. |
 | `domain` | string | (empty) | Reserved for future use (custom domain support). |
 | `web_plan` | choice | -- | VM compute offering for the web server. Options range from `micro` through `4xlarge`. |
@@ -252,6 +253,7 @@ jobs:
   deploy:
     uses: gmautner/locaweb-ai-deploy/.github/workflows/deploy.yml@main
     with:
+      env_name: "production"
       zone: "ZP01"
       domain: "myapp.example.com"
       web_plan: "small"
@@ -280,6 +282,7 @@ jobs:
   teardown:
     uses: gmautner/locaweb-ai-deploy/.github/workflows/teardown.yml@main
     with:
+      env_name: "production"
       zone: "ZP01"
     secrets:
       CLOUDSTACK_API_KEY: ${{ secrets.CLOUDSTACK_API_KEY }}
@@ -365,6 +368,6 @@ Longer-term directions under consideration:
 
 - ~~**Custom domain support.**~~ Implemented: the `domain` workflow input enables custom domain routing with automatic TLS via Let's Encrypt.
 - **Monitoring and alerting.** Integrate application and infrastructure monitoring (metrics, logs, alerts) into the deployment workflow.
-- **Multi-environment support.** Enable staging/production environment separation with distinct resource naming and network isolation.
+- ~~**Multi-environment support.**~~ Implemented: the `env_name` workflow input enables multiple isolated environments (preview, staging, production) from the same repository, each with distinct resource naming and network isolation.
 - ~~**Disaster recovery automation.**~~ Implemented: the `recover` workflow input enables recovery from snapshots (same-zone; cross-zone pending Locaweb Cloud support for `copySnapshot`).
 - **Vertical scaling of web and database.** The web and database tiers scale vertically (larger VM plans). Kamal Proxy with Let's Encrypt only works with a single web VM, so horizontal web scaling is not planned. The target workloads are expected to scale well vertically.

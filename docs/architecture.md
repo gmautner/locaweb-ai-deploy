@@ -81,18 +81,16 @@ The system is composed of five logical layers:
 
 ### Resource naming convention
 
-All CloudStack resources are named using the pattern `{repo-name}-{unique-id}`, where `unique-id` is `github.repository_id` for production deployments and `github.run_id` for test runs. This ensures complete isolation between production and test infrastructure.
+All CloudStack resources are named using the pattern `{repo-name}-{unique-id}-{env-name}`, where `unique-id` is `github.repository_id` for production deployments and `github.run_id` for test runs, and `env-name` is the environment name (e.g., `preview`, `staging`, `production`). This ensures complete isolation between different repositories, test runs, and environments.
 
-> **Note:** The naming convention is subject to further refinement when multi-environment support is introduced, as the same repository will have distinct deployments per environment (e.g., staging vs. production).
-
-Examples:
-- Network: `my-app-123456789`
-- SSH keypair: `my-app-123456789-key`
-- Web VM: `my-app-123456789-web`
-- Worker VMs: `my-app-123456789-worker-1`, `my-app-123456789-worker-2`, ...
-- Database VM: `my-app-123456789-db`
-- Blob disk: `my-app-123456789-blob`
-- Database disk: `my-app-123456789-dbdata`
+Examples (with env_name `preview`):
+- Network: `my-app-123456789-preview`
+- SSH keypair: `my-app-123456789-preview-key`
+- Web VM: `my-app-123456789-preview-web`
+- Worker VMs: `my-app-123456789-preview-worker-1`, `my-app-123456789-preview-worker-2`, ...
+- Database VM: `my-app-123456789-preview-db`
+- Blob disk: `my-app-123456789-preview-blob`
+- Database disk: `my-app-123456789-preview-dbdata`
 
 ---
 
@@ -110,7 +108,7 @@ A single-job reusable workflow that provisions infrastructure and deploys the ap
 
 **Dual checkout:** The workflow performs two checkouts: (1) `actions/checkout@v4` retrieves the caller's application code (Dockerfile, source), and (2) a second checkout retrieves infrastructure scripts from `gmautner/locaweb-ai-deploy` into `_infra/`. All script paths use `_infra/scripts/` prefixes. In internal mode, the first checkout gets this repository itself and the second is redundant but harmless.
 
-**Concurrency:** Shares a concurrency group (`deploy-${{ github.repository }}`) with `teardown.yml` to prevent overlapping infrastructure operations. `cancel-in-progress` is false so queued runs wait rather than cancel.
+**Concurrency:** Shares a per-environment concurrency group (`deploy-${{ github.repository }}-${{ inputs.env_name }}`) with `teardown.yml` to prevent overlapping infrastructure operations on the same environment. Deploying to "staging" does not block "production". `cancel-in-progress` is false so queued runs wait rather than cancel.
 
 **Workflow outputs** (exposed to callers): `web_ip`, `worker_ips`, `db_ip`, `db_internal_ip`.
 
@@ -118,6 +116,7 @@ A single-job reusable workflow that provisions infrastructure and deploys the ap
 
 | Input | Type | Default | Description |
 |---|---|---|---|
+| `env_name` | string | `preview` | Environment name for resource isolation (e.g., preview, staging, production) |
 | `zone` | choice | `ZP01` | CloudStack availability zone |
 | `domain` | string | `""` | Custom domain; enables SSL via Let's Encrypt when set |
 | `web_plan` | choice | `small` | VM size for the web server |
@@ -152,7 +151,7 @@ A single-job reusable workflow that provisions infrastructure and deploys the ap
 
 #### teardown.yml
 
-A reusable workflow that destroys all CloudStack resources in reverse creation order. Supports both `workflow_dispatch` and `workflow_call` triggers. Uses the same CloudMonkey installation pattern as the deploy workflow. Shares the `deploy-${{ github.repository }}` concurrency group with `deploy.yml`.
+A reusable workflow that destroys all CloudStack resources in reverse creation order. Supports both `workflow_dispatch` and `workflow_call` triggers. Uses the same CloudMonkey installation pattern as the deploy workflow. Shares the per-environment `deploy-${{ github.repository }}-${{ inputs.env_name }}` concurrency group with `deploy.yml`.
 
 **Dual checkout:** Unlike deploy.yml, the teardown workflow only needs the infrastructure scripts (no application code), so it performs a single checkout of `gmautner/locaweb-ai-deploy` into `_infra/`.
 
@@ -160,6 +159,7 @@ A reusable workflow that destroys all CloudStack resources in reverse creation o
 
 | Input | Type | Required | Description |
 |---|---|---|---|
+| `env_name` | string | no (default: `preview`) | Environment name to tear down |
 | `zone` | choice (`ZP01`/`ZP02`) | yes | CloudStack zone to tear down |
 
 The `zone` input is passed as `--zone` to the teardown script, so only resources in the specified zone are destroyed. This is critical for cross-zone DR scenarios where the same network name exists in multiple zones.
@@ -226,10 +226,10 @@ An application-focused E2E test workflow that triggers the **real** `deploy.yml`
 
 | Scenario | Deploy inputs | Verifications |
 |---|---|---|
-| `complete` | zone, workers=1, db=true | /up→200, page content, POST note, file upload, blob mount + writable, DB mount, implicit disk sizes (20GB), worker container env vars |
-| `web-only` | zone only (defaults) | /up→200 (no DB), "Database not configured" message, env vars visible, file upload, blob mount, no workers/DB in output |
-| `scale-up` | workers 1→3, db=true, explicit disk sizes (30GB blob, 25GB db) | Initial worker verified, then 3 workers all have app container + env vars, explicit disk sizes verified, app healthy after scale |
-| `scale-down` | workers 3→1, db=true | 3 workers initially, then 1 remains with app + env vars, app healthy after scale |
+| `complete` | zone, env_name=preview, workers=1, db=true | /up→200, page content, POST note, file upload, blob mount + writable, DB mount, implicit disk sizes (20GB), worker container env vars |
+| `web-only` | zone, env_name=preview (defaults) | /up→200 (no DB), "Database not configured" message, env vars visible, file upload, blob mount, no workers/DB in output |
+| `scale-up` | env_name=e2etest, workers 1→3, db=true, explicit disk sizes (30GB blob, 25GB db) | Initial worker verified, then 3 workers all have app container + env vars, explicit disk sizes verified, app healthy after scale |
+| `scale-down` | zone, env_name=preview, workers 3→1, db=true | 3 workers initially, then 1 remains with app + env vars, app healthy after scale |
 | `all` | Runs all four in sequence | Each scenario triggers its own teardown at the end |
 
 **Workflow triggering pattern:** The E2E script records the latest run ID before triggering `gh workflow run`, then polls until a new run with a higher ID appears. It then uses `gh run watch --exit-status` to wait for completion and `gh run download` to retrieve the provision-output artifact.
@@ -776,6 +776,6 @@ Two complementary test suites validate the system at different levels:
 
 ### E2E test constraints
 
-- E2E tests use `github.repository_id` for resource naming, sharing the same namespace as production deployments. Running E2E tests will tear down any existing production deployment.
+- E2E tests use `github.repository_id` for resource naming with env names `preview` and `e2etest`. Running E2E tests will tear down any existing deployment using those env names.
 - Each scenario takes 8-15 minutes (provisioning + Kamal deploy + verification + teardown). The "all" scenario may take 45-60 minutes.
 - The E2E workflow requires `ENV_VARS` (variable containing `MY_VAR=...`) and `SECRET_ENV_VARS` (secret containing `MY_SECRET=...`) to be configured in the repository for environment variable verification.

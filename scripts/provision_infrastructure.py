@@ -17,6 +17,7 @@ Usage:
     python3 scripts/provision_infrastructure.py \\
         --repo-name my-app \\
         --unique-id 12345 \\
+        --env-name preview \\
         --config /tmp/config.json
 """
 import argparse
@@ -528,7 +529,7 @@ def get_vm_internal_ip(vm_id):
 # Main provisioning logic
 # ---------------------------------------------------------------------------
 
-def provision(config, repo_name, unique_id, public_key, recover=False):
+def provision(config, repo_name, unique_id, env_name, public_key, recover=False):
     """Provision all infrastructure based on the validated config."""
     zone_name = config["zone"]
     web_plan = config["web_plan"]
@@ -536,7 +537,7 @@ def provision(config, repo_name, unique_id, public_key, recover=False):
     workers_enabled = config["workers_enabled"]
     db_enabled = config["db_enabled"]
 
-    network_name = f"{repo_name}-{unique_id}"
+    network_name = f"{repo_name}-{unique_id}-{env_name}"
     keypair_name = f"{network_name}-key"
     web_vm_name = f"{network_name}-web"
     blob_disk_name = f"{network_name}-blob"
@@ -836,6 +837,8 @@ def main():
                         help="Repository name")
     parser.add_argument("--unique-id", required=True,
                         help="Unique identifier (repository ID)")
+    parser.add_argument("--env-name", default="preview",
+                        help="Environment name (default: preview)")
     parser.add_argument("--config", required=True,
                         help="Path to validated JSON config file")
     parser.add_argument("--public-key", required=True,
@@ -854,7 +857,8 @@ def main():
 
     try:
         results = provision(config, repo_name=args.repo_name,
-                            unique_id=args.unique_id, public_key=public_key,
+                            unique_id=args.unique_id,
+                            env_name=args.env_name, public_key=public_key,
                             recover=args.recover)
         if args.output:
             with open(args.output, "w") as f:

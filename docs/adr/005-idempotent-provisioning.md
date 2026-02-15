@@ -40,4 +40,4 @@ For example: `my-rails-app-123456-web`, `my-rails-app-123456-worker-1`, `my-rail
 - Requires strict naming consistency. If the naming convention changes, old resources become orphaned (not found by the new lookup) and new duplicates are created.
 - Name-based lookup relies on the CloudStack `list` API filtering correctly by name. Some resource types have different filtering behavior.
 - Resources cannot be renamed without being recreated. A repository rename would orphan all existing resources.
-- The naming convention will need to be refactored when multi-environment support is introduced, since the same repository will have distinct deployments per environment (e.g., staging vs. production) requiring environment-aware resource names.
+- ~~The naming convention will need to be refactored when multi-environment support is introduced, since the same repository will have distinct deployments per environment (e.g., staging vs. production) requiring environment-aware resource names.~~ Addressed by [ADR-021](021-environment-name-support.md): the naming convention is now `{repo-name}-{unique-id}-{env-name}`.

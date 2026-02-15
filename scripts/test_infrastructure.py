@@ -30,8 +30,9 @@ import traceback
 
 REPO_NAME = os.environ.get("REPO_NAME", "locaweb-ai-deploy")
 UNIQUE_ID = os.environ.get("UNIQUE_ID", "test")
+ENV_NAME = os.environ.get("ENV_NAME", "test")
 ZONE = os.environ.get("ZONE", "ZP01")
-NETWORK_NAME = f"{REPO_NAME}-{UNIQUE_ID}"
+NETWORK_NAME = f"{REPO_NAME}-{UNIQUE_ID}-{ENV_NAME}"
 
 SSH_KEY_PATH = "/tmp/ssh_key"
 PUBLIC_KEY_PATH = "/tmp/ssh_key.pub"
@@ -393,6 +394,7 @@ class TestRunner:
             ["python3", "-u", PROVISION_SCRIPT,
              "--repo-name", REPO_NAME,
              "--unique-id", UNIQUE_ID,
+             "--env-name", ENV_NAME,
              "--config", config_path,
              "--public-key", PUBLIC_KEY_PATH,
              "--output", PROVISION_OUTPUT],

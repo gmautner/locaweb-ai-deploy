@@ -61,6 +61,7 @@ jobs:
         env:
           REPO_NAME: ${{ github.event.repository.name }}
           UNIQUE_ID: ${{ github.run_id }}
+          ENV_NAME: "test"
           ZONE: ${{ inputs.zone || 'ZP01' }}
         run: |
           python3 -u scripts/test_infrastructure.py
@@ -68,7 +69,7 @@ jobs:
       - name: Emergency teardown
         if: always()
         run: |
-          NETWORK_NAME="${{ github.event.repository.name }}-${{ github.run_id }}"
+          NETWORK_NAME="${{ github.event.repository.name }}-${{ github.run_id }}-test"
           echo "Emergency teardown for: $NETWORK_NAME"
           python3 -u scripts/teardown_infrastructure.py \
             --network-name "$NETWORK_NAME" \

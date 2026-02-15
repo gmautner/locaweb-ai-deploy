@@ -10,12 +10,16 @@
 name: Teardown
 
 concurrency:
-  group: deploy-${{ github.repository }}
+  group: deploy-${{ github.repository }}-${{ inputs.env_name || 'preview' }}
   cancel-in-progress: false
 
 on:
   workflow_dispatch:
     inputs:
+      env_name:
+        description: "Environment name (e.g. preview, staging, production)"
+        required: false
+        default: "preview"
       zone:
         description: "CloudStack zone"
         type: choice
@@ -26,6 +30,9 @@ on:
 
   workflow_call:
     inputs:
+      env_name:
+        type: string
+        default: "preview"
       zone:
         type: string
         required: true
@@ -66,11 +73,11 @@ jobs:
       - name: Teardown infrastructure
         run: |
           python3 -u _infra/scripts/teardown_infrastructure.py \
-            --network-name "${{ github.event.repository.name }}-${{ github.repository_id }}" \
+            --network-name "${{ github.event.repository.name }}-${{ github.repository_id }}-${{ inputs.env_name || 'preview' }}" \
             --zone "${{ inputs.zone }}"
 
       - name: Print summary
         run: |
           echo "## Infrastructure Teardown Complete" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "All resources for **${{ github.event.repository.name }}-${{ github.repository_id }}** have been destroyed." >> $GITHUB_STEP_SUMMARY
+          echo "All resources for **${{ github.event.repository.name }}-${{ github.repository_id }}-${{ inputs.env_name || 'preview' }}** have been destroyed." >> $GITHUB_STEP_SUMMARY

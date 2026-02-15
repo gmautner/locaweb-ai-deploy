@@ -87,7 +87,9 @@ jobs:
       - name: Initial teardown
         run: |
           python3 -u scripts/teardown_infrastructure.py \
-            --network-name "${{ github.event.repository.name }}-${{ github.repository_id }}" || true
+            --network-name "${{ github.event.repository.name }}-${{ github.repository_id }}-preview" || true
+          python3 -u scripts/teardown_infrastructure.py \
+            --network-name "${{ github.event.repository.name }}-${{ github.repository_id }}-e2etest" || true
 
       - name: Run E2E tests
         env:
@@ -109,7 +111,9 @@ jobs:
         run: |
           echo "Emergency teardown..."
           python3 -u scripts/teardown_infrastructure.py \
-            --network-name "${{ github.event.repository.name }}-${{ github.repository_id }}" || true
+            --network-name "${{ github.event.repository.name }}-${{ github.repository_id }}-preview" || true
+          python3 -u scripts/teardown_infrastructure.py \
+            --network-name "${{ github.event.repository.name }}-${{ github.repository_id }}-e2etest" || true
 
       - name: Test summary
         if: always()
