@@ -34,6 +34,16 @@ When working on this project, use the following references to get context on the
 
 - **Workflow Syntax Reference:** https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax
 
+## Skills
+
+### skill-creator
+
+The `.claude/skills/skill-creator/` skill was vendored from https://github.com/anthropics/skills/tree/main/skills/skill-creator. Check the source repo for updates before using it for new skill work.
+
+### locaweb-cloud-deploy
+
+The `.claude/skills/locaweb-cloud-deploy/` skill documents the reusable workflow contract for external repositories deploying to Locaweb Cloud. Keep it in sync when changing workflow inputs, secrets, outputs, or platform behavior.
+
 ## Development Process
 
 Use the sample FastAPI app in the root of the repo as the test application.
