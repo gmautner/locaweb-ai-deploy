@@ -36,6 +36,8 @@ When working on this project, use the following references to get context on the
 
 ## Skills
 
+When changing skills, always use the skill-creator skill to package the skill before committing.
+
 ### skill-creator
 
 The `.claude/skills/skill-creator/` skill was vendored from https://github.com/anthropics/skills/tree/main/skills/skill-creator. Check the source repo for updates before using it for new skill work.
