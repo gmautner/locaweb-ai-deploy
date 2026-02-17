@@ -19,6 +19,7 @@ name: Deploy Preview
 on:
   push:
     branches: [main]
+    paths-ignore: [".claude/**"]
 
 permissions:
   contents: read
@@ -139,6 +140,7 @@ name: Deploy Preview
 on:
   push:
     branches: [main]
+    paths-ignore: [".claude/**"]
 
 permissions:
   contents: read
