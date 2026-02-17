@@ -1,7 +1,7 @@
 # Architecture Design Document -- locaweb-cloud-deploy
 
 **Status:** Living document
-**Last updated:** 2026-02-13
+**Last updated:** 2026-02-17
 
 ---
 
@@ -627,19 +627,23 @@ workflow_dispatch -> CloudMonkey -> CloudStack API
 
 ### Secret management
 
+Secrets are scoped per environment. The default preview environment uses unsuffixed names. Additional environments use the environment name (uppercased) as a suffix. Secrets common to all environments (CloudStack credentials, `GITHUB_TOKEN`) have no suffix.
+
 | Secret | Scope | Purpose |
 |---|---|---|
-| `CLOUDSTACK_API_KEY` | GitHub repository secret | CloudStack API authentication |
-| `CLOUDSTACK_SECRET_KEY` | GitHub repository secret | CloudStack API authentication |
-| `SSH_PRIVATE_KEY` | GitHub repository secret | SSH access to all VMs |
-| `POSTGRES_USER` | GitHub repository secret | PostgreSQL superuser name |
-| `POSTGRES_PASSWORD` | GitHub repository secret | PostgreSQL superuser password |
+| `CLOUDSTACK_API_KEY` | Global (all environments) | CloudStack API authentication |
+| `CLOUDSTACK_SECRET_KEY` | Global (all environments) | CloudStack API authentication |
+| `SSH_PRIVATE_KEY` | Per-environment (preview: unsuffixed, others: `_<ENV_NAME>`) | SSH access to VMs in the target environment |
+| `POSTGRES_USER` | Per-environment (preview: unsuffixed, others: `_<ENV_NAME>`) | PostgreSQL superuser name |
+| `POSTGRES_PASSWORD` | Per-environment (preview: unsuffixed, others: `_<ENV_NAME>`) | PostgreSQL superuser password |
 | `GITHUB_TOKEN` | Automatic (GitHub) | ghcr.io registry authentication |
+
+Example for a "production" environment: `SSH_PRIVATE_KEY_PRODUCTION`, `POSTGRES_USER_PRODUCTION`, `POSTGRES_PASSWORD_PRODUCTION`. The caller workflow maps these suffixed secrets to the reusable workflow's standard (unsuffixed) secret names.
 
 ### Secret handling practices
 
 - **No secrets in source control**: The `.kamal/secrets` file uses `$VAR` references that Kamal resolves from the process environment at runtime. The file is generated during the workflow run and is never committed.
-- **SSH key isolation**: The private key is written to a temporary file with mode 600 during the workflow run. The public key is derived at runtime using `ssh-keygen -y` (the public key is never stored as a separate secret).
+- **Per-environment SSH key isolation**: Each environment has its own SSH key pair (e.g., `~/.ssh/<repo-name>` for preview, `~/.ssh/<repo-name>-production` for production). The private key is written to a temporary file with mode 600 during the workflow run. The public key is derived at runtime using `ssh-keygen -y` (the public key is never stored as a separate secret). This ensures that compromising one environment's key does not grant access to other environments' VMs.
 - **Early validation**: When `db_enabled` is true, the workflow validates that `POSTGRES_USER` and `POSTGRES_PASSWORD` are set before any infrastructure is provisioned.
 - **Scoped tokens**: `GITHUB_TOKEN` is automatically provided by GitHub Actions with `packages: write` scope, limited to the current repository.
 
@@ -647,7 +651,7 @@ workflow_dispatch -> CloudMonkey -> CloudStack API
 
 - **Firewall rules**: Only the web VM is exposed on HTTP (80) and HTTPS (443). Workers and the database VM are reachable only via SSH (22) from the internet. Database traffic (5432) stays on the private network.
 - **Static NAT**: Each VM has its own dedicated public IP. There is no shared ingress point.
-- **SSH root access**: Kamal requires root SSH access for Docker management. The SSH key pair is unique per deployment.
+- **SSH root access**: Kamal requires root SSH access for Docker management. Each environment has its own isolated SSH key pair, so keys from one environment cannot be used to access VMs in another.
 
 ### Identified security considerations
 
