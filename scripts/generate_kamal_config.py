@@ -5,7 +5,9 @@ Reads from environment:
   INPUT_WORKERS_ENABLED - Whether workers are enabled
   INPUT_WORKERS_CMD     - Command for worker containers
   INPUT_DB_ENABLED      - Whether database is enabled
+  INPUT_DB_PLAN         - Database VM plan (micro, small, medium, etc.)
   INPUT_DOMAIN          - Custom domain (optional, enables SSL via Let's Encrypt)
+  POSTGRES_IMAGE        - Full postgres image reference (e.g. supabase/postgres:17.6.1.084)
   REPO_NAME             - Repository name
   REPO_FULL             - Full repository path (owner/name)
   REPO_OWNER            - Repository owner
@@ -23,11 +25,56 @@ import os
 
 import yaml
 
+# Plan name -> RAM in MiB
+PLAN_RAM_MB = {
+    'micro': 1024,
+    'small': 2048,
+    'medium': 4096,
+    'large': 8192,
+    'xlarge': 16384,
+    '2xlarge': 32768,
+    '4xlarge': 65536,
+}
+
+
+def compute_pg_params(plan):
+    """Compute PostgreSQL tuning parameters based on DB VM plan size."""
+    ram_mb = PLAN_RAM_MB[plan]
+
+    if ram_mb <= 4096:
+        max_conn = 100
+    elif ram_mb <= 16384:
+        max_conn = 200
+    else:
+        max_conn = 400
+
+    shared_buffers_mb = ram_mb // 4
+    effective_cache_size_mb = ram_mb * 3 // 4
+    work_mem_mb = ram_mb // max_conn // 4
+    work_mem_mb = max(work_mem_mb, 2)
+    maintenance_work_mem_mb = ram_mb // 16
+    maintenance_work_mem_mb = min(maintenance_work_mem_mb, 2048)
+
+    def fmt(mb):
+        if mb >= 1024 and mb % 1024 == 0:
+            return f'{mb // 1024}GB'
+        return f'{mb}MB'
+
+    return {
+        'shared_buffers': fmt(shared_buffers_mb),
+        'effective_cache_size': fmt(effective_cache_size_mb),
+        'work_mem': fmt(work_mem_mb),
+        'maintenance_work_mem': fmt(maintenance_work_mem_mb),
+        'max_connections': str(max_conn),
+    }
+
+
 d = json.load(open('/tmp/provision-output.json'))
 
 workers_enabled = os.environ.get('INPUT_WORKERS_ENABLED') == 'true'
 workers_cmd = os.environ.get('INPUT_WORKERS_CMD', '')
 db_enabled = os.environ.get('INPUT_DB_ENABLED') == 'true'
+db_plan = os.environ.get('INPUT_DB_PLAN', 'medium')
 domain = os.environ.get('INPUT_DOMAIN', '').strip()
 repo_name = os.environ['REPO_NAME']
 repo_full = os.environ['REPO_FULL']
@@ -98,12 +145,14 @@ if db_enabled:
         'POSTGRES_PASSWORD',
         'DATABASE_URL',
     ]
+    pg_params = compute_pg_params(db_plan)
+    pg_cmd = ' '.join(f'--{k}={v}' for k, v in pg_params.items())
     config['accessories'] = {
         'db': {
-            'image': 'postgres:16',
+            'image': os.environ.get('POSTGRES_IMAGE', 'postgres:16'),
             'host': db_ip,
             'port': '5432:5432',
-            'cmd': '--shared_buffers=256MB',
+            'cmd': pg_cmd,
             'env': {
                 'clear': {
                     'POSTGRES_DB': postgres_db,
