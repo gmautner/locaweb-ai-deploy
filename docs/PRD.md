@@ -1,4 +1,4 @@
-# Product Requirements Document: locaweb-ai-deploy
+# Product Requirements Document: locaweb-cloud-deploy
 
 **Version:** 1.0
 **Date:** 2026-02-13
@@ -8,7 +8,7 @@
 
 ## 1. Overview
 
-`locaweb-ai-deploy` is a reusable GitHub Actions workflow that automates end-to-end deployment of web applications onto Locaweb Cloud, a CloudStack-based Infrastructure-as-a-Service (IaaS) platform. It provisions all required infrastructure -- virtual machines, networks, disks, public IPs, firewall rules, and snapshot policies -- and then deploys a containerized application using Kamal 2.
+`locaweb-cloud-deploy` is a reusable GitHub Actions workflow that automates end-to-end deployment of web applications onto Locaweb Cloud, a CloudStack-based Infrastructure-as-a-Service (IaaS) platform. It provisions all required infrastructure -- virtual machines, networks, disks, public IPs, firewall rules, and snapshot policies -- and then deploys a containerized application using Kamal 2.
 
 The workflow is designed to be invoked by other repositories, providing a turnkey deployment layer that any application repository can adopt. Both `workflow_dispatch` (direct/internal) and `workflow_call` (reusable/cross-repo) triggers are supported, so any repo can reference the deploy and teardown workflows without duplicating infrastructure logic.
 
@@ -251,7 +251,7 @@ permissions:
   packages: write
 jobs:
   deploy:
-    uses: gmautner/locaweb-ai-deploy/.github/workflows/deploy.yml@main
+    uses: gmautner/locaweb-cloud-deploy/.github/workflows/deploy.yml@main
     with:
       env_name: "production"
       zone: "ZP01"
@@ -280,7 +280,7 @@ on:
   workflow_dispatch:
 jobs:
   teardown:
-    uses: gmautner/locaweb-ai-deploy/.github/workflows/teardown.yml@main
+    uses: gmautner/locaweb-cloud-deploy/.github/workflows/teardown.yml@main
     with:
       env_name: "production"
       zone: "ZP01"
@@ -324,7 +324,7 @@ The system supports four deployment topologies, all controlled through workflow 
 ## 11. File Structure
 
 ```
-locaweb-ai-deploy/
+locaweb-cloud-deploy/
 |-- app.py                              Sample Flask application
 |-- Dockerfile                          Container image (python:3.12-slim + gunicorn)
 |-- requirements.txt                    Python dependencies

@@ -112,7 +112,7 @@ def teardown(network_name, zone_id=None):
         # 1. Delete snapshot policies for data volumes
         print("[1/8] Removing snapshot policies...")
         vol_args = ["list", "volumes", "type=DATADISK",
-                    "tags[0].key=locaweb-ai-deploy-id",
+                    "tags[0].key=locaweb-cloud-deploy-id",
                     f"tags[0].value={network_name}",
                     "filter=id,name"]
         if zone_id:

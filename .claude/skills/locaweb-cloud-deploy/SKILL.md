@@ -2,7 +2,7 @@
 name: locaweb-cloud-deploy
 description: >
   Deploy containerized web applications to Locaweb Cloud using reusable GitHub Actions workflows
-  from gmautner/locaweb-ai-deploy. Use this skill when an agent or user needs to: (1) set up a
+  from gmautner/locaweb-cloud-deploy. Use this skill when an agent or user needs to: (1) set up a
   repository for deployment to Locaweb Cloud, (2) create or modify GitHub Actions deploy/teardown
   caller workflows, (3) configure secrets and environment variables for Locaweb Cloud deployment,
   (4) write or adapt a Dockerfile for the platform, (5) understand deployment outputs like IPs and
@@ -13,7 +13,7 @@ description: >
 
 # Locaweb Cloud Deploy
 
-Deploy web applications to Locaweb Cloud by calling reusable workflows from `gmautner/locaweb-ai-deploy`. The platform provisions CloudStack VMs, networks, disks, and firewall rules, then deploys containers via Kamal 2 with zero-downtime proxy.
+Deploy web applications to Locaweb Cloud by calling reusable workflows from `gmautner/locaweb-cloud-deploy`. The platform provisions CloudStack VMs, networks, disks, and firewall rules, then deploys containers via Kamal 2 with zero-downtime proxy.
 
 ## Platform Constraints (Read First)
 
@@ -33,7 +33,7 @@ If the application's current design conflicts with any of these (e.g., depends o
 ## Workflow Overview
 
 ```
-Caller repo                          gmautner/locaweb-ai-deploy
+Caller repo                          gmautner/locaweb-cloud-deploy
 +-----------------------+            +-----------------------------+
 | .github/workflows/    |  calls     | .github/workflows/          |
 |   deploy.yml        -------->      |   deploy.yml (provisions    |

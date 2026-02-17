@@ -1,6 +1,6 @@
 # Architectural Decision Records
 
-This directory contains the Architectural Decision Records (ADRs) for the `locaweb-ai-deploy` project.
+This directory contains the Architectural Decision Records (ADRs) for the `locaweb-cloud-deploy` project.
 
 | ADR | Title | Status |
 |-----|-------|--------|

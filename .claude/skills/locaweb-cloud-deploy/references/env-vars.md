@@ -79,7 +79,7 @@ Complete example showing both clear and secret custom variables for a production
 ```yaml
 jobs:
   deploy:
-    uses: gmautner/locaweb-ai-deploy/.github/workflows/deploy.yml@main
+    uses: gmautner/locaweb-cloud-deploy/.github/workflows/deploy.yml@main
     with:
       env_name: "production"
       zone: "ZP01"

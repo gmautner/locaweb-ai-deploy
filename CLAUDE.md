@@ -66,4 +66,4 @@ Reserve the **infrastructure test** workflow (`test-infrastructure.yml`) for aft
 For quick manual verification against live infrastructure:
 
 - **CloudMonkey (cmk):** Available in the terminal for direct CloudStack API queries.
-- **SSH key:** `~/.ssh/locaweb-ai-deploy-key` — use this to SSH into deployed VMs (e.g., `ssh -i ~/.ssh/locaweb-ai-deploy-key root@<ip>`).
+- **SSH key:** `~/.ssh/locaweb-cloud-deploy-key` — use this to SSH into deployed VMs (e.g., `ssh -i ~/.ssh/locaweb-cloud-deploy-key root@<ip>`).

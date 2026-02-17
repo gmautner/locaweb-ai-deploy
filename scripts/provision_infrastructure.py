@@ -347,9 +347,9 @@ def create_disk(disk_name, disk_offering_id, zone_id, size_gb, vm_id,
         cmk("create", "tags",
             f"resourceids={vol_id}",
             "resourcetype=Volume",
-            "tags[0].key=locaweb-ai-deploy-id",
+            "tags[0].key=locaweb-cloud-deploy-id",
             f"tags[0].value={network_name}")
-        print(f"    Tagged with locaweb-ai-deploy-id={network_name}")
+        print(f"    Tagged with locaweb-cloud-deploy-id={network_name}")
         cmk("attach", "volume", f"id={vol_id}",
             f"virtualmachineid={vm_id}")
         print(f"    Attached to VM")
@@ -369,7 +369,7 @@ def create_snapshot_policy(vol_id, network_name, snapshot_zoneids, desc):
             f"maxsnaps={SNAPSHOT_MAX}",
             f"timezone={SNAPSHOT_TIMEZONE}",
             f"zoneids={snapshot_zoneids}",
-            "tags[0].key=locaweb-ai-deploy-id",
+            "tags[0].key=locaweb-cloud-deploy-id",
             f"tags[0].value={network_name}")
         print(f"  {desc}: daily snapshot policy created")
 
@@ -384,7 +384,7 @@ def find_latest_snapshots(network_name, zone_id, db_enabled):
     data = cmk("list", "snapshots", f"zoneid={zone_id}",
                "filter=id,name,volumename,created,state",
                "snapshottype=MANUAL",
-               f"tags[0].key=locaweb-ai-deploy-id",
+               f"tags[0].key=locaweb-cloud-deploy-id",
                f"tags[0].value={network_name}")
     snapshots = data.get("snapshot", [])
 
@@ -392,7 +392,7 @@ def find_latest_snapshots(network_name, zone_id, db_enabled):
     data2 = cmk("list", "snapshots", f"zoneid={zone_id}",
                 "filter=id,name,volumename,created,state",
                 "snapshottype=RECURRING",
-                f"tags[0].key=locaweb-ai-deploy-id",
+                f"tags[0].key=locaweb-cloud-deploy-id",
                 f"tags[0].value={network_name}")
     snapshots.extend(data2.get("snapshot", []))
 
@@ -481,9 +481,9 @@ def create_disk_from_snapshot(disk_name, snapshot_id, vm_id, network_name,
     cmk("create", "tags",
         f"resourceids={vol_id}",
         "resourcetype=Volume",
-        "tags[0].key=locaweb-ai-deploy-id",
+        "tags[0].key=locaweb-cloud-deploy-id",
         f"tags[0].value={network_name}")
-    print(f"    Tagged with locaweb-ai-deploy-id={network_name}")
+    print(f"    Tagged with locaweb-cloud-deploy-id={network_name}")
     cmk("attach", "volume", f"id={vol_id}",
         f"virtualmachineid={vm_id}")
     print(f"    Attached to VM")

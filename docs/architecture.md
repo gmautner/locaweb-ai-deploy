@@ -1,4 +1,4 @@
-# Architecture Design Document -- locaweb-ai-deploy
+# Architecture Design Document -- locaweb-cloud-deploy
 
 **Status:** Living document
 **Last updated:** 2026-02-13
@@ -21,7 +21,7 @@
 
 ## Overview
 
-`locaweb-ai-deploy` automates end-to-end deployment of containerized web applications onto Locaweb Cloud, a CloudStack-based IaaS platform. The system uses GitHub Actions as its orchestration layer and Kamal 2 as its container deployment tool.
+`locaweb-cloud-deploy` automates end-to-end deployment of containerized web applications onto Locaweb Cloud, a CloudStack-based IaaS platform. The system uses GitHub Actions as its orchestration layer and Kamal 2 as its container deployment tool.
 
 The deploy and teardown workflows support dual triggers: `workflow_dispatch` for direct use, and `workflow_call` for invocation by external repositories. This makes the system a reusable deployment platform — any application repository can reference the workflows without duplicating infrastructure logic. A dual checkout pattern retrieves the caller's application code alongside the infrastructure scripts from this repository.
 
@@ -106,7 +106,7 @@ A single-job reusable workflow that provisions infrastructure and deploys the ap
 
 **Triggers:** `workflow_dispatch` for direct use and `workflow_call` for invocation by external repositories. Both triggers accept the same inputs, though `workflow_call` uses `type: string` where `workflow_dispatch` uses `type: choice` (unsupported by `workflow_call`). Boolean and number types are shared as-is.
 
-**Dual checkout:** The workflow performs two checkouts: (1) `actions/checkout@v4` retrieves the caller's application code (Dockerfile, source), and (2) a second checkout retrieves infrastructure scripts from `gmautner/locaweb-ai-deploy` into `_infra/`. All script paths use `_infra/scripts/` prefixes. In internal mode, the first checkout gets this repository itself and the second is redundant but harmless.
+**Dual checkout:** The workflow performs two checkouts: (1) `actions/checkout@v4` retrieves the caller's application code (Dockerfile, source), and (2) a second checkout retrieves infrastructure scripts from `gmautner/locaweb-cloud-deploy` into `_infra/`. All script paths use `_infra/scripts/` prefixes. In internal mode, the first checkout gets this repository itself and the second is redundant but harmless.
 
 **Concurrency:** Shares a per-environment concurrency group (`deploy-${{ github.repository }}-${{ inputs.env_name }}`) with `teardown.yml` to prevent overlapping infrastructure operations on the same environment. Deploying to "staging" does not block "production". `cancel-in-progress` is false so queued runs wait rather than cancel.
 
@@ -134,7 +134,7 @@ A single-job reusable workflow that provisions infrastructure and deploys the ap
 
 1. **Validate secrets** -- If `db_enabled` is true, verifies that `POSTGRES_USER` and `POSTGRES_PASSWORD` secrets exist. Fails fast if missing.
 2. **Checkout application repository** -- `actions/checkout@v4` retrieves the caller's code (or this repo in internal mode).
-2b. **Checkout infrastructure scripts** -- `actions/checkout@v4` with `repository: gmautner/locaweb-ai-deploy` and `path: _infra`.
+2b. **Checkout infrastructure scripts** -- `actions/checkout@v4` with `repository: gmautner/locaweb-cloud-deploy` and `path: _infra`.
 3. **Build configuration** -- Inline Python assembles workflow inputs into a JSON config file at `/tmp/config.json`.
 4. **Extract SSH public key** -- Derives the public key from the `SSH_PRIVATE_KEY` secret using `ssh-keygen -y`.
 5. **Install CloudMonkey** -- Downloads the `cmk` binary, configures it with the CloudStack API endpoint (`painel-cloud.locaweb.com.br`), API key, and secret key. Runs `cmk sync` to populate the local API cache.
@@ -153,7 +153,7 @@ A single-job reusable workflow that provisions infrastructure and deploys the ap
 
 A reusable workflow that destroys all CloudStack resources in reverse creation order. Supports both `workflow_dispatch` and `workflow_call` triggers. Uses the same CloudMonkey installation pattern as the deploy workflow. Shares the per-environment `deploy-${{ github.repository }}-${{ inputs.env_name }}` concurrency group with `deploy.yml`.
 
-**Dual checkout:** Unlike deploy.yml, the teardown workflow only needs the infrastructure scripts (no application code), so it performs a single checkout of `gmautner/locaweb-ai-deploy` into `_infra/`.
+**Dual checkout:** Unlike deploy.yml, the teardown workflow only needs the infrastructure scripts (no application code), so it performs a single checkout of `gmautner/locaweb-cloud-deploy` into `_infra/`.
 
 **Workflow inputs:**
 
@@ -247,7 +247,7 @@ A Python script that uses the CloudMonkey CLI (`cmk`) to interact with the Cloud
 - **Worker scale-down**: After deploying the desired number of workers, the script probes for excess workers (worker-N+1, worker-N+2, ...) and destroys them along with their associated public IPs, firewall rules, and static NAT mappings.
 - **Static NAT conflict avoidance**: When assigning public IPs, the script first checks for existing static NAT mappings per VM. It reuses existing assignments and only acquires new IPs for VMs that lack one. This prevents CloudStack's "VM already has a static NAT IP" error during scale-up scenarios.
 - **Userdata injection**: All VMs receive base64-encoded cloud-init scripts. Web and DB scripts format and mount their data disks. All scripts (web, worker, DB) install and configure fail2ban for SSH brute-force protection.
-- **Volume tagging**: Data disks are tagged with `locaweb-ai-deploy-id={network-name}` to enable the teardown script to find them reliably.
+- **Volume tagging**: Data disks are tagged with `locaweb-cloud-deploy-id={network-name}` to enable the teardown script to find them reliably.
 - **Disaster recovery**: When `--recover` is passed, the script creates data volumes from the latest available snapshots (MANUAL or RECURRING, in BackedUp state) in the target zone instead of blank disks. Pre-flight checks verify no conflicting deployment exists and required snapshots are available. Snapshot policies are still created on recovered volumes for ongoing protection.
 - **Template discovery**: Automatically selects the most recent Ubuntu 24.x template matching the regex `^Ubuntu.*24.*$`.
 
