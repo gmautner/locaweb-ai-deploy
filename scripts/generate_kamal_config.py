@@ -7,7 +7,6 @@ Reads from environment:
   INPUT_DB_ENABLED      - Whether database is enabled
   INPUT_DB_PLAN         - Database VM plan (micro, small, medium, etc.)
   INPUT_DOMAIN          - Custom domain (optional, enables SSL via Let's Encrypt)
-  POSTGRES_IMAGE        - Full postgres image reference (e.g. supabase/postgres:17.6.1.084)
   REPO_NAME             - Repository name
   REPO_FULL             - Full repository path (owner/name)
   REPO_OWNER            - Repository owner
@@ -149,7 +148,7 @@ if db_enabled:
     pg_cmd = ' '.join(f'--{k}={v}' for k, v in pg_params.items())
     config['accessories'] = {
         'db': {
-            'image': os.environ.get('POSTGRES_IMAGE', 'postgres:16'),
+            'image': 'postgres:17',
             'host': db_ip,
             'port': '5432:5432',
             'cmd': pg_cmd,

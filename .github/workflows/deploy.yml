@@ -347,13 +347,6 @@ jobs:
           pip install -q python-dotenv
           python3 _infra/scripts/create_kamal_secrets.py
 
-      - name: Resolve Postgres image tag
-        if: inputs.db_enabled
-        id: pg_image
-        run: |
-          pip install -q requests
-          echo "image=$(python3 _infra/scripts/resolve_postgres_tag.py)" >> "$GITHUB_OUTPUT"
-
       - name: Generate Kamal deploy config
         env:
           INPUT_WORKERS_ENABLED: ${{ inputs.workers_enabled }}
@@ -361,7 +354,6 @@ jobs:
           INPUT_DB_ENABLED: ${{ inputs.db_enabled }}
           INPUT_DB_PLAN: ${{ inputs.db_plan }}
           INPUT_DOMAIN: ${{ inputs.domain }}
-          POSTGRES_IMAGE: ${{ steps.pg_image.outputs.image }}
           REPO_NAME: ${{ github.event.repository.name }}
           REPO_FULL: ${{ github.repository }}
           REPO_OWNER: ${{ github.repository_owner }}

@@ -42,6 +42,7 @@ The deploy and teardown workflows support dual triggers: `workflow_dispatch` for
 ### TODOs
 
 - **IP filtering for SSH.** Restrict SSH firewall rules to GitHub Actions runner IP ranges.
+- **PostgreSQL extensions.** Provide a mechanism for callers to install additional PostgreSQL extensions (e.g. pgvector, pg_cron) on the official `postgres:17` image.
 
 ---
 
@@ -70,8 +71,8 @@ The system is composed of five logical layers:
 |                Locaweb Cloud (CloudStack)                      |
 |  +----------+  +----------+  +----------+                     |
 |  | Web VM   |  | Worker   |  | DB VM    |                     |
-|  | kamal-   |  | VMs (Nx) |  | supabase/|                     |
-|  | proxy +  |  | app      |  | postgres |                     |
+|  | kamal-   |  | VMs (Nx) |  | postgres |                     |
+|  | proxy +  |  | app      |  | :17      |                     |
 |  | app      |  | workers  |  |          |                     |
 |  +----------+  +----------+  +----------+                     |
 |                                                               |
@@ -145,11 +146,10 @@ A single-job reusable workflow that provisions infrastructure and deploys the ap
 10. **Install Kamal** -- `gem install kamal` (Kamal 2 from RubyGems).
 11. **Prepare SSH key** -- Copies the private key to `.kamal/ssh_key` with mode 600.
 12. **Create secrets file and env vars** -- Writes `.kamal/secrets` with `$VAR` references for `KAMAL_REGISTRY_PASSWORD`, and conditionally `POSTGRES_USER`, `POSTGRES_PASSWORD`, and `DATABASE_URL` (if `db_enabled`). Parses the `SECRET_ENV_VARS` secret and `ENV_VARS` variable (both in dotenv format) using `python-dotenv`: secrets are added as `$VAR` references in `.kamal/secrets` and their resolved values are written to a sourceable env file for the deploy step; variables are written to a JSON file for the config generation step to merge as clear env vars.
-13. **Resolve Postgres image tag** -- (Only when `db_enabled`) Queries Docker Hub for `supabase/postgres` tags, filters to 4-component numeric tags under major version 17, and selects the highest version. The resolved image reference (e.g. `supabase/postgres:17.6.1.084`) is passed to the next step via `POSTGRES_IMAGE`.
-14. **Generate deploy config** -- Inline Python dynamically generates `config/deploy.yml` (the Kamal configuration) from the provision output, incorporating conditional sections for workers and database accessories. When the `domain` input is set, the proxy host is set to the domain and SSL is enabled via Let's Encrypt; otherwise, nip.io wildcard DNS is used with SSL disabled. Merges any custom variables from `ENV_VARS` as clear env vars and custom secrets from `SECRET_ENV_VARS` as secret env vars.
-15. **Deploy with Kamal** -- Runs `kamal setup`, which handles Docker installation on all hosts, registry authentication, image build and push, accessory boot (PostgreSQL), and application deployment behind kamal-proxy.
-16. **Reboot DB accessory if tuning changed** -- (Only when `db_enabled`) Compares the desired PostgreSQL `cmd` from the generated config against the running container's command via `docker inspect`. If the parameters differ (i.e., `db_plan` changed since the last deploy), runs `kamal accessory reboot db` to recreate the container with updated tuning. Skipped on first deploy (container was just created with correct parameters) and when the plan hasn't changed. This is necessary because `kamal setup` skips existing accessory containers, and Docker's `--restart unless-stopped` policy preserves the original command even across VM reboots.
-17. **Print deployment summary** -- Outputs commit SHA, image tag, application URL, and health check URL to the step summary.
+13. **Generate deploy config** -- Inline Python dynamically generates `config/deploy.yml` (the Kamal configuration) from the provision output, incorporating conditional sections for workers and database accessories. When the `domain` input is set, the proxy host is set to the domain and SSL is enabled via Let's Encrypt; otherwise, nip.io wildcard DNS is used with SSL disabled. Merges any custom variables from `ENV_VARS` as clear env vars and custom secrets from `SECRET_ENV_VARS` as secret env vars.
+14. **Deploy with Kamal** -- Runs `kamal setup`, which handles Docker installation on all hosts, registry authentication, image build and push, accessory boot (PostgreSQL), and application deployment behind kamal-proxy.
+15. **Reboot DB accessory if tuning changed** -- (Only when `db_enabled`) Compares the desired PostgreSQL `cmd` from the generated config against the running container's command via `docker inspect`. If the parameters differ (i.e., `db_plan` changed since the last deploy), runs `kamal accessory reboot db` to recreate the container with updated tuning. Skipped on first deploy (container was just created with correct parameters) and when the plan hasn't changed. This is necessary because `kamal setup` skips existing accessory containers, and Docker's `--restart unless-stopped` policy preserves the original command even across VM reboots.
+16. **Print deployment summary** -- Outputs commit SHA, image tag, application URL, and health check URL to the step summary.
 
 #### teardown.yml
 
@@ -348,7 +348,7 @@ volumes:
   - /data/blobs:/data/blobs
 accessories:                            # Only if db_enabled
   db:
-    image: supabase/postgres:<resolved-tag>  # e.g. 17.6.1.084, resolved at deploy time
+    image: postgres:17
     host: <db-public-ip>
     port: "5432:5432"
     cmd: --shared_buffers=1GB --effective_cache_size=3GB --work_mem=10MB --maintenance_work_mem=256MB --max_connections=100  # Tuned for db_plan (e.g. medium/4GB)
@@ -431,7 +431,7 @@ A Flask web application that exercises all platform features:
 - **Custom environment variables**: Displays `MY_VAR` and `MY_SECRET` values on the index page, demonstrating the `SECRET_ENV_VARS`/`ENV_VARS` injection mechanism.
 - **HTTP request headers**: Displays all incoming HTTP request headers on the index page for debugging proxy behavior.
 
-**Dockerfile:** Based on `python:3.12-slim`. The CMD conditionally retries `init_db()` up to 60 times only when `POSTGRES_HOST` is set (to wait for the PostgreSQL accessory to become available), then always starts gunicorn with `exec` for proper signal handling. When no database is configured, gunicorn starts immediately without the init_db retry loop.
+**Dockerfile:** Based on `python:3.12-slim`. The CMD conditionally retries `init_db()` up to 30 times only when `POSTGRES_HOST` is set (to wait for the PostgreSQL accessory to become available), then always starts gunicorn with `exec` for proper signal handling. When no database is configured, gunicorn starts immediately without the init_db retry loop.
 
 ### 7. VM Userdata Scripts
 
@@ -671,7 +671,7 @@ Example for a "production" environment: `SSH_PRIVATE_KEY_PRODUCTION`, `POSTGRES_
 | Component | Strategy | Details |
 |---|---|---|
 | CloudMonkey API calls | Exponential backoff | 5 retries: 2s, 4s, 8s, 16s, 32s (total ~62s max wait) |
-| Database initialization | Linear retry | 60 attempts with 2-second sleep (up to 120s) |
+| Database initialization | Linear retry | 30 attempts with 2-second sleep (up to 60s) |
 | Disk attachment wait | Polling | 5-second intervals, 300-second timeout |
 | SSH connectivity (tests) | Polling | 10-second intervals, 180-second timeout |
 
@@ -741,7 +741,7 @@ Two complementary test suites validate the system at different levels:
 | **ghcr.io** | Container registry | GitHub Container Registry. Authentication via `GITHUB_TOKEN` eliminates the need for separate registry credentials. |
 | **Python** | Provisioning scripts | Used for infrastructure provisioning, teardown, test suite, and inline workflow scripts. Chosen for readability and availability on `ubuntu-latest` runners without installation. |
 | **Flask + gunicorn** | Sample application | Lightweight Python web framework for the sample app. gunicorn provides a production WSGI server with configurable worker count. |
-| **supabase/postgres 17** | Database | Deployed as a Kamal accessory in a Docker container on the dedicated DB VM using `supabase/postgres` for its richer extension set. The image tag (e.g. `17.6.1.084`) is resolved automatically at deploy time by querying Docker Hub for the latest 4-component tag under major version 17. PostgreSQL parameters (`shared_buffers`, `effective_cache_size`, `work_mem`, `maintenance_work_mem`, `max_connections`) are auto-tuned based on the selected `db_plan` size (see ADR-024). PGDATA is set to a subdirectory to handle ext4 filesystem compatibility (the `lost+found` directory in the mount root). |
+| **PostgreSQL 17** | Database | Deployed as a Kamal accessory in a Docker container on the dedicated DB VM using the official `postgres:17` image. PostgreSQL parameters (`shared_buffers`, `effective_cache_size`, `work_mem`, `maintenance_work_mem`, `max_connections`) are auto-tuned based on the selected `db_plan` size (see ADR-024). PGDATA is set to a subdirectory to handle ext4 filesystem compatibility (the `lost+found` directory in the mount root). |
 | **nip.io** | Wildcard DNS | Free wildcard DNS service. Resolves `A.B.C.D.nip.io` to `A.B.C.D`, eliminating the need for custom DNS configuration during development and testing. |
 | **Ubuntu 24.x** | VM template | Auto-discovered from the CloudStack template catalog. Provides a recent LTS base with cloud-init support. |
 

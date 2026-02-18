@@ -1,6 +1,6 @@
 # ADR-023: Switch to supabase/postgres with Automated Tag Resolution
 
-**Status:** Accepted
+**Status:** Rejected
 **Date:** 2026-02-17
 
 ## Context
@@ -9,35 +9,24 @@ The project used the official `postgres:16` Docker image as the database accesso
 
 `supabase/postgres` is a PostgreSQL image maintained by Supabase that bundles a curated set of popular extensions on top of the official PostgreSQL distribution. It is well-maintained and widely used.
 
-However, unlike the official postgres image which supports short tags like `16` or `17`, supabase/postgres only publishes 4-digit tags like `17.6.1.084`. Some tags also carry suffixes (e.g. `-orioledb`) for alternative storage engines. We need a way to automatically resolve the latest eligible tag at deploy time rather than hardcoding a specific version.
+However, unlike the official postgres image which supports short tags like `16` or `17`, supabase/postgres only publishes 4-digit tags like `17.6.1.084`. Some tags also carry suffixes (e.g. `-orioledb`) for alternative storage engines, requiring a tag resolution mechanism at deploy time.
 
 ## Decision
 
-1. **Switch the database accessory image** from `postgres:16` to `supabase/postgres` with a tag under major version 17.
-2. **Automate tag resolution** with a new script (`scripts/resolve_postgres_tag.py`) that queries Docker Hub at deploy time to find the latest 4-component numeric tag matching `^17\.\d+\.\d+\.\d+$` (no suffixes).
-3. **Pass the resolved image** via the `POSTGRES_IMAGE` environment variable from the workflow to the config generation script, with a fallback to `postgres:16` if unset.
+Rejected. The `supabase/postgres` image introduces too many customizations that deviate from standard PostgreSQL behavior, requiring extensive workarounds to function in our deployment model. We prefer solutions that work out of the box and behave without surprises.
 
-## Tag Selection Rules
+Specific issues encountered:
 
-- **Major version:** 17 only (to track the latest PostgreSQL major version).
-- **Tag format:** Exactly 4 numeric components `a.b.c.d` — no suffixes like `-orioledb`.
-- **Selection:** Highest version by tuple comparison.
-- **Source:** Single page of 50 most recent tags from Docker Hub API (sufficient since the highest version will be among recent pushes).
+- **Hardcoded `supabase_admin` role**: The entrypoint init script (`migrate.sh`) expects a `supabase_admin` PostgreSQL role, removing the caller's freedom to choose their own database username via the `POSTGRES_USER` secret.
+- **`listen_addresses = localhost`**: The image's `initdb`-generated `postgresql.conf` defaults `listen_addresses` to `localhost`, silently preventing external connections. The supabase config at `/etc/postgresql/postgresql.conf` sets `*`, but PostgreSQL loads the PGDATA copy instead, causing a hard-to-diagnose failure where the container appears healthy but refuses all network connections.
+- **Non-standard tag scheme**: The 4-component version tags (`17.x.y.z`) required a custom tag resolution script and Docker Hub API queries at deploy time, adding complexity and a runtime dependency.
 
-## Consequences
+The cumulative effect — a required username, a hidden networking default, and a custom tag resolver — is too much tweaking for what should be a drop-in database image. The official `postgres:17` image works correctly with no additional configuration.
 
-### Positive
+The primary motivation for evaluating `supabase/postgres` was its bundled extension set. Providing a mechanism for callers to install PostgreSQL extensions on the official image remains an open task.
 
-- **Richer extension set**: Applications get access to pgvector, pg_cron, and dozens of other extensions without building a custom image.
-- **Automatic updates**: The tag resolution script picks the latest patch version on each deploy, keeping the database image current without manual intervention.
-- **Graceful fallback**: If `POSTGRES_IMAGE` is not set (e.g. when the resolve step is skipped), the config script falls back to `postgres:16`.
+## Original Proposal
 
-### Negative
-
-- **Docker Hub dependency**: The resolve step requires Docker Hub API availability at deploy time. If Docker Hub is down, the step fails and blocks deployment.
-- **No pinning**: The image tag changes between deploys as new versions are published. This is acceptable for this project but could be a concern for strict reproducibility requirements.
-- **Major version bump requires code change**: Moving to PostgreSQL 18 will require updating the regex in the resolve script.
-
-### Neutral
-
-- The `requests` Python library is installed during the workflow step (`pip install -q requests`). This adds a small amount of time to the workflow but is negligible.
+1. Switch the database accessory image from `postgres:16` to `supabase/postgres` with a tag under major version 17.
+2. Automate tag resolution with a script that queries Docker Hub at deploy time.
+3. Pass the resolved image via `POSTGRES_IMAGE` to the config generation script.
