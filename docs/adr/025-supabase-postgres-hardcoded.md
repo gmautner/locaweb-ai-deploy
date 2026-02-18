@@ -34,6 +34,6 @@ Switch the database accessory image from `postgres:17` to `supabase/postgres` wi
 
 **Negative:**
 
-- The image tag must be manually updated when upgrading PostgreSQL versions (no `postgres:17`-style floating tag).
+- The image tag is pinned and requires explicit updates (no `postgres:17`-style floating tag). The `update-supabase-postgres` workflow checks Docker Hub weekly and opens a PR when a newer `17.x` tag is available.
 - Applications that previously relied on choosing a custom database user or name no longer have that flexibility.
 - The `supabase/postgres` image is larger than the official `postgres:17` image due to bundled extensions.
