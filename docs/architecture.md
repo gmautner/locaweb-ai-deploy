@@ -431,7 +431,7 @@ A Flask web application that exercises all platform features:
 - **Custom environment variables**: Displays `MY_VAR` and `MY_SECRET` values on the index page, demonstrating the `SECRET_ENV_VARS`/`ENV_VARS` injection mechanism.
 - **HTTP request headers**: Displays all incoming HTTP request headers on the index page for debugging proxy behavior.
 
-**Dockerfile:** Based on `python:3.12-slim`. The CMD conditionally retries `init_db()` up to 30 times only when `POSTGRES_HOST` is set (to wait for the PostgreSQL accessory to become available), then always starts gunicorn with `exec` for proper signal handling. When no database is configured, gunicorn starts immediately without the init_db retry loop.
+**Dockerfile:** Based on `python:3.12-slim`. The CMD conditionally retries `init_db()` up to 60 times only when `POSTGRES_HOST` is set (to wait for the PostgreSQL accessory to become available), then always starts gunicorn with `exec` for proper signal handling. When no database is configured, gunicorn starts immediately without the init_db retry loop.
 
 ### 7. VM Userdata Scripts
 
@@ -671,7 +671,7 @@ Example for a "production" environment: `SSH_PRIVATE_KEY_PRODUCTION`, `POSTGRES_
 | Component | Strategy | Details |
 |---|---|---|
 | CloudMonkey API calls | Exponential backoff | 5 retries: 2s, 4s, 8s, 16s, 32s (total ~62s max wait) |
-| Database initialization | Linear retry | 30 attempts with 2-second sleep (up to 60s) |
+| Database initialization | Linear retry | 60 attempts with 2-second sleep (up to 120s) |
 | Disk attachment wait | Polling | 5-second intervals, 300-second timeout |
 | SSH connectivity (tests) | Polling | 10-second intervals, 180-second timeout |
 
