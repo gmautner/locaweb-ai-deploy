@@ -239,10 +239,10 @@ def encode_userdata(script_path):
 
 def deploy_vm(name, offering_id, template_id, zone_id, net_id, keypair_name,
               userdata_path=None):
-    """Deploy a VM or return existing one's ID.
+    """Deploy a VM or return existing one's ID and whether it was scaled.
 
-    If the VM already exists but its service offering differs from the
-    desired one, it is scaled in-place via scale_vm().
+    Returns (vm_id, scaled) where *scaled* is True when the VM already
+    existed but its service offering was changed in-place.
 
     If userdata_path is provided and the file exists, the script is
     base64-encoded and passed as cloud-init userdata during deployment.
@@ -254,9 +254,10 @@ def deploy_vm(name, offering_id, template_id, zone_id, net_id, keypair_name,
         if current_offering and current_offering != offering_id:
             print(f"  Offering changed: {name} ({vm_id})")
             scale_vm(vm_id, name, offering_id)
+            return vm_id, True
         else:
             print(f"  Already exists: {name} ({vm_id})")
-        return vm_id
+        return vm_id, False
     deploy_args = [
         "deploy", "virtualmachine",
         f"serviceofferingid={offering_id}",
@@ -274,7 +275,7 @@ def deploy_vm(name, offering_id, template_id, zone_id, net_id, keypair_name,
     print(f"  Created: {name} ({vm_id})")
     if userdata_path and os.path.exists(userdata_path):
         print(f"  Userdata: {os.path.basename(userdata_path)} (cloud-init)")
-    return vm_id
+    return vm_id, False
 
 
 def scale_vm(vm_id, name, new_offering_id):
@@ -618,9 +619,9 @@ def provision(config, repo_name, unique_id, env_name, public_key, recover=False)
 
     # --- Deploy VMs ---
     print("\nDeploying web VM...")
-    web_vm_id = deploy_vm(web_vm_name, web_offering_id, template_id,
-                          zone_id, net_id, keypair_name,
-                          userdata_path=WEB_USERDATA)
+    web_vm_id, _ = deploy_vm(web_vm_name, web_offering_id, template_id,
+                             zone_id, net_id, keypair_name,
+                             userdata_path=WEB_USERDATA)
     results["web_vm_id"] = web_vm_id
 
     worker_vm_ids = []
@@ -629,9 +630,9 @@ def provision(config, repo_name, unique_id, env_name, public_key, recover=False)
         print(f"\nDeploying {num_workers} worker VM(s)...")
         for i in range(1, num_workers + 1):
             worker_name = f"{network_name}-worker-{i}"
-            wid = deploy_vm(worker_name, worker_offering_id, template_id,
-                            zone_id, net_id, keypair_name,
-                            userdata_path=WORKER_USERDATA)
+            wid, _ = deploy_vm(worker_name, worker_offering_id, template_id,
+                              zone_id, net_id, keypair_name,
+                              userdata_path=WORKER_USERDATA)
             worker_vm_ids.append(wid)
         results["worker_vm_ids"] = worker_vm_ids
 
@@ -639,10 +640,12 @@ def provision(config, repo_name, unique_id, env_name, public_key, recover=False)
     if db_enabled:
         db_vm_name = f"{network_name}-db"
         print("\nDeploying database VM...")
-        db_vm_id = deploy_vm(db_vm_name, db_offering_id, template_id,
-                             zone_id, net_id, keypair_name,
-                             userdata_path=DB_USERDATA)
+        db_vm_id, db_vm_scaled = deploy_vm(db_vm_name, db_offering_id,
+                                           template_id, zone_id, net_id,
+                                           keypair_name,
+                                           userdata_path=DB_USERDATA)
         results["db_vm_id"] = db_vm_id
+        results["db_vm_scaled"] = db_vm_scaled
 
     # --- Scale down excess workers ---
     desired_workers = config["workers_replicas"] if workers_enabled else 0
