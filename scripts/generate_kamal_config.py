@@ -153,7 +153,7 @@ if db_enabled:
     )
     config['accessories'] = {
         'db': {
-            'image': 'supabase/postgres:17.6.1.084',
+            'image': 'supabase/postgres:17.6.1.087',
             'host': db_ip,
             'port': '5432:5432',
             'cmd': pg_cmd,
