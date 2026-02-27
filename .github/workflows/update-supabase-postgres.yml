@@ -29,7 +29,7 @@ jobs:
       - name: Detect current version
         id: current
         run: |
-          version=$(grep -oP "supabase/postgres:\K[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+" scripts/generate_kamal_config.py)
+          version=$(grep -oP 'SUPABASE_POSTGRES_VERSION: "\K[^"]+' .github/workflows/deploy.yml)
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "Current pinned version: **$version**" >> "$GITHUB_STEP_SUMMARY"
 
@@ -74,8 +74,10 @@ jobs:
           current="${{ steps.current.outputs.version }}"
           latest="${{ steps.latest.outputs.version }}"
 
+          sed -i "s|SUPABASE_POSTGRES_VERSION: \"${current}\"|SUPABASE_POSTGRES_VERSION: \"${latest}\"|" \
+            .github/workflows/deploy.yml
+
           sed -i "s|supabase/postgres:${current}|supabase/postgres:${latest}|g" \
-            scripts/generate_kamal_config.py \
             docs/architecture.md
 
       - name: Create PR
@@ -90,7 +92,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git checkout -b "$branch"
-          git add scripts/generate_kamal_config.py docs/architecture.md
+          git add .github/workflows/deploy.yml docs/architecture.md
           git commit -m "Bump supabase/postgres ${current} → ${latest}"
           git push -u origin "$branch"
 
@@ -104,7 +106,7 @@ jobs:
           | **Current** | \`${current}\` |
           | **New** | \`${latest}\` |
 
-          Both \`scripts/generate_kamal_config.py\` and \`docs/architecture.md\` have been updated.
+          \`deploy.yml\` (env var) and \`docs/architecture.md\` have been updated.
 
           > Staying within major version 17, so this is a safe patch/minor bump (ADR-025).
           EOF

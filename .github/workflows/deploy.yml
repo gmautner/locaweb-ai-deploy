@@ -387,6 +387,7 @@ jobs:
           REPO_NAME: ${{ github.event.repository.name }}
           REPO_FULL: ${{ github.repository }}
           REPO_OWNER: ${{ github.repository_owner }}
+          SUPABASE_POSTGRES_VERSION: "17.6.1.087"
         run: python3 _infra/scripts/generate_kamal_config.py
 
       - name: Expose GitHub Actions runtime for Docker cache

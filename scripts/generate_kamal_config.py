@@ -10,6 +10,7 @@ Reads from environment:
   REPO_NAME             - Repository name
   REPO_FULL             - Full repository path (owner/name)
   REPO_OWNER            - Repository owner
+  SUPABASE_POSTGRES_VERSION - supabase/postgres image tag (e.g. 17.6.1.087)
 
 Reads from files:
   /tmp/provision-output.json      - Provisioning output (IPs, etc.)
@@ -153,7 +154,7 @@ if db_enabled:
     )
     config['accessories'] = {
         'db': {
-            'image': 'supabase/postgres:17.6.1.087',
+            'image': f'supabase/postgres:{os.environ["SUPABASE_POSTGRES_VERSION"]}',
             'host': db_ip,
             'port': '5432:5432',
             'cmd': pg_cmd,
