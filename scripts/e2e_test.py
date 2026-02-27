@@ -1451,13 +1451,13 @@ class E2ETestRunner:
             s.assert_contains(body, test_filename,
                               "Uploaded file visible on original deploy")
 
-            # 5. Flush filesystem buffers and create manual snapshots
-            # No Postgres CHECKPOINT — Postgres is crash-safe by design.
-            # But regular file writes (blob uploads) sit in the kernel page
-            # cache until dirty_expire_centisecs (~30 s).  A pre-snapshot
-            # sync is standard practice for block-level backups.
-            print("  Syncing filesystems before snapshot...")
-            self.ssh.run_command(web_ip, "sync")
+            # 5. Wait for natural disk flush, then create manual snapshots
+            # No explicit sync or Postgres CHECKPOINT — we wait 60 s so the
+            # kernel's dirty page writeback (~30 s default) flushes file
+            # writes naturally, reproducing real-world scheduled snapshot
+            # conditions.
+            print("  Waiting 60 s for natural disk flush...")
+            time.sleep(60)
             blob_snap_id = None
             db_snap_id = None
             if blob_vol_id:
