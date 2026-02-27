@@ -1451,9 +1451,13 @@ class E2ETestRunner:
             s.assert_contains(body, test_filename,
                               "Uploaded file visible on original deploy")
 
-            # 5. Create manual snapshots with locaweb-cloud-deploy-id tag
-            # No CHECKPOINT — Postgres is crash-safe by design, and skipping
-            # it reproduces stricter real-world disaster conditions.
+            # 5. Flush filesystem buffers and create manual snapshots
+            # No Postgres CHECKPOINT — Postgres is crash-safe by design.
+            # But regular file writes (blob uploads) sit in the kernel page
+            # cache until dirty_expire_centisecs (~30 s).  A pre-snapshot
+            # sync is standard practice for block-level backups.
+            print("  Syncing filesystems before snapshot...")
+            self.ssh.run_command(web_ip, "sync")
             blob_snap_id = None
             db_snap_id = None
             if blob_vol_id:
