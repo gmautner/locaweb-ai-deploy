@@ -471,11 +471,12 @@ def recovery_preflight(network_name, zone_id, db_enabled):
 
 
 def create_disk_from_snapshot(disk_name, snapshot_id, vm_id, network_name,
-                              desc):
+                              zone_id, desc):
     """Create a volume from a snapshot, tag it, and attach to VM."""
     data = cmk("create", "volume",
                f"name={disk_name}",
-               f"snapshotid={snapshot_id}")
+               f"snapshotid={snapshot_id}",
+               f"zoneid={zone_id}")
     vol_id = data["volume"]["id"]
     print(f"  {desc}: created from snapshot ({vol_id})")
     cmk("create", "tags",
@@ -766,14 +767,14 @@ def provision(config, repo_name, unique_id, env_name, public_key, recover=False)
         print("\nRecovering data disks from snapshots...")
         blob_vol_id = create_disk_from_snapshot(
             blob_disk_name, recovery_snapshots["blob"]["id"],
-            web_vm_id, network_name, "Blob disk (web)")
+            web_vm_id, network_name, zone_id, "Blob disk (web)")
         results["blob_volume_id"] = blob_vol_id
 
         if db_enabled:
             db_disk_name = f"{network_name}-dbdata"
             db_vol_id = create_disk_from_snapshot(
                 db_disk_name, recovery_snapshots["dbdata"]["id"],
-                db_vm_id, network_name, "DB disk (db)")
+                db_vm_id, network_name, zone_id, "DB disk (db)")
             results["db_volume_id"] = db_vol_id
     else:
         print("\nCreating data disks...")
