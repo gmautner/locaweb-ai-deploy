@@ -204,17 +204,31 @@ def verify_snapshot_policy(vol_id, expected_network_name=None):
     return result
 
 
+def resolve_all_zone_ids():
+    """Resolve all available zone IDs (for snapshot replication)."""
+    data = cmk("list", "zones", "filter=id")
+    if data:
+        return [z["id"] for z in data.get("zone", [])]
+    return []
+
+
 def create_tagged_snapshot(vol_id, network_name):
-    """Create a manual snapshot of a volume and tag it.
+    """Create a manual snapshot of a volume, replicate to all zones, and tag it.
 
     Returns the snapshot ID, or None on failure.
     """
-    data = cmk("create", "snapshot", f"volumeid={vol_id}")
+    all_zone_ids = resolve_all_zone_ids()
+    zoneids_arg = ",".join(all_zone_ids)
+    args = ["create", "snapshot", f"volumeid={vol_id}"]
+    if zoneids_arg:
+        args.append(f"zoneids={zoneids_arg}")
+    data = cmk(*args)
     if not data or "snapshot" not in data:
         print(f"    Failed to create snapshot for volume {vol_id}")
         return None
     snap_id = data["snapshot"]["id"]
-    print(f"    Created snapshot {snap_id} for volume {vol_id}")
+    print(f"    Created snapshot {snap_id} for volume {vol_id}"
+          f" (zoneids={zoneids_arg})")
     cmk("create", "tags",
         f"resourceids={snap_id}",
         "resourcetype=Snapshot",
@@ -1465,11 +1479,11 @@ class E2ETestRunner:
                 "DB snapshot ready in ZP01")
             s.assert_true(
                 wait_for_snapshot_in_zone(blob_name, network_name, "ZP02",
-                                         timeout=600),
+                                         timeout=900),
                 "Blob snapshot replicated to ZP02")
             s.assert_true(
                 wait_for_snapshot_in_zone(dbdata_name, network_name, "ZP02",
-                                         timeout=600),
+                                         timeout=900),
                 "DB snapshot replicated to ZP02")
 
             # 7. Try recovery to ZP01 (same zone) — expect failure
