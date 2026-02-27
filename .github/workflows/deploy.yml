@@ -377,6 +377,10 @@ jobs:
           pip install -q python-dotenv
           python3 _infra/scripts/create_kamal_secrets.py
 
+      - name: Read supabase-postgres version
+        id: pg-version
+        run: echo "version=$(cat .supabase-postgres-version)" >> "$GITHUB_OUTPUT"
+
       - name: Generate Kamal deploy config
         env:
           INPUT_WORKERS_ENABLED: ${{ inputs.workers_enabled }}
@@ -387,7 +391,7 @@ jobs:
           REPO_NAME: ${{ github.event.repository.name }}
           REPO_FULL: ${{ github.repository }}
           REPO_OWNER: ${{ github.repository_owner }}
-          SUPABASE_POSTGRES_VERSION: "17.6.1.087"
+          SUPABASE_POSTGRES_VERSION: ${{ steps.pg-version.outputs.version }}
         run: python3 _infra/scripts/generate_kamal_config.py
 
       - name: Expose GitHub Actions runtime for Docker cache
