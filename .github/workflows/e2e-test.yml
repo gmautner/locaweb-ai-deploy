@@ -46,12 +46,13 @@ on:
           - web-only
           - scale-up
           - scale-down
+          - recovery
           - all
 
 jobs:
   e2e:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 180
 
     steps:
       - name: Checkout repository
@@ -89,6 +90,9 @@ jobs:
             --network-name "${{ github.event.repository.name }}-${{ github.repository_id }}-preview" || true
           python3 -u scripts/teardown_infrastructure.py \
             --network-name "${{ github.event.repository.name }}-${{ github.repository_id }}-e2etest" || true
+          # Also clean up ZP02 in case a previous recovery scenario left resources
+          python3 -u scripts/teardown_infrastructure.py \
+            --network-name "${{ github.event.repository.name }}-${{ github.repository_id }}-preview" --zone ZP02 || true
 
       - name: Run E2E tests
         env:
@@ -113,6 +117,9 @@ jobs:
             --network-name "${{ github.event.repository.name }}-${{ github.repository_id }}-preview" || true
           python3 -u scripts/teardown_infrastructure.py \
             --network-name "${{ github.event.repository.name }}-${{ github.repository_id }}-e2etest" || true
+          # Also clean up ZP02 in case the recovery scenario left resources
+          python3 -u scripts/teardown_infrastructure.py \
+            --network-name "${{ github.event.repository.name }}-${{ github.repository_id }}-preview" --zone ZP02 || true
 
       - name: Test summary
         if: always()

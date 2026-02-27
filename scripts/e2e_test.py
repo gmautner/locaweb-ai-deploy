@@ -12,7 +12,7 @@ Environment variables:
   REPO_NAME                      - Repository name
   REPO_ID                        - Repository ID (used for resource naming)
   ZONE                           - CloudStack zone (ZP01/ZP02)
-  SCENARIO                       - Test scenario (complete/web-only/scale-up/scale-down/all)
+  SCENARIO                       - Test scenario (complete/web-only/scale-up/scale-down/recovery/all)
   SSH_KEY_PATH                   - Path to SSH private key
   ROUTE_53_AWS_ACCESS_KEY_ID     - AWS access key for Route53 DNS management
   ROUTE_53_AWS_SECRET_ACCESS_KEY - AWS secret key for Route53 DNS management
@@ -156,6 +156,120 @@ def get_vm_offering_name(vm_id):
     return None
 
 
+def verify_snapshot_policy(vol_id, expected_network_name=None):
+    """Verify that a snapshot policy exists on a volume with correct config.
+
+    Checks:
+    1. At least one policy exists.
+    2. The policy has the locaweb-cloud-deploy-id tag with the expected value.
+    3. The policy replicates to all available zones (ZP01 + ZP02).
+
+    Returns a dict with keys: exists, tag_ok, zones_ok, zone_names, details.
+    """
+    result = {"exists": False, "tag_ok": False, "zones_ok": False,
+              "zone_names": [], "details": ""}
+
+    data = cmk("list", "snapshotpolicies", f"volumeid={vol_id}")
+    if not data or not data.get("snapshotpolicy"):
+        result["details"] = "no snapshot policy found"
+        return result
+
+    policy = data["snapshotpolicy"][0]
+    result["exists"] = True
+
+    # Check tag
+    tags = policy.get("tags", [])
+    deploy_tags = [t for t in tags if t.get("key") == "locaweb-cloud-deploy-id"]
+    if deploy_tags:
+        tag_value = deploy_tags[0].get("value", "")
+        if expected_network_name is None or tag_value == expected_network_name:
+            result["tag_ok"] = True
+        else:
+            result["details"] = (f"tag value mismatch: "
+                                 f"expected={expected_network_name}, "
+                                 f"actual={tag_value}")
+    else:
+        result["details"] = "locaweb-cloud-deploy-id tag not found"
+
+    # Check zones — policy should cover all available zones
+    zones = policy.get("zone", [])
+    result["zone_names"] = sorted(z.get("name", "") for z in zones)
+    # Both ZP01 and ZP02 must be present for cross-zone DR to work
+    if "ZP01" in result["zone_names"] and "ZP02" in result["zone_names"]:
+        result["zones_ok"] = True
+    else:
+        if not result["details"]:
+            result["details"] = f"zone coverage incomplete: {result['zone_names']}"
+
+    return result
+
+
+def create_tagged_snapshot(vol_id, network_name):
+    """Create a manual snapshot of a volume and tag it.
+
+    Returns the snapshot ID, or None on failure.
+    """
+    data = cmk("create", "snapshot", f"volumeid={vol_id}")
+    if not data or "snapshot" not in data:
+        print(f"    Failed to create snapshot for volume {vol_id}")
+        return None
+    snap_id = data["snapshot"]["id"]
+    print(f"    Created snapshot {snap_id} for volume {vol_id}")
+    cmk("create", "tags",
+        f"resourceids={snap_id}",
+        "resourcetype=Snapshot",
+        "tags[0].key=locaweb-cloud-deploy-id",
+        f"tags[0].value={network_name}")
+    print(f"    Tagged snapshot with locaweb-cloud-deploy-id={network_name}")
+    return snap_id
+
+
+def wait_for_snapshot_in_zone(vol_name, network_name, zone_name, timeout=600):
+    """Poll for a snapshot to appear in a zone with state=BackedUp.
+
+    Checks both MANUAL and RECURRING snapshot types, matching by tag
+    (locaweb-cloud-deploy-id) and volumename — same logic as
+    find_latest_snapshots in provision_infrastructure.py.
+
+    Returns True when found, False on timeout.
+    """
+    # Resolve zone name to ID
+    zone_data = cmk("list", "zones", f"name={zone_name}", "filter=id,name")
+    zone_id = None
+    if zone_data:
+        for z in zone_data.get("zone", []):
+            if z["name"] == zone_name:
+                zone_id = z["id"]
+                break
+    if not zone_id:
+        print(f"    Zone '{zone_name}' not found")
+        return False
+
+    print(f"    Waiting for snapshot of '{vol_name}' in {zone_name} "
+          f"(timeout {timeout}s)...")
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        all_snaps = []
+        for snap_type in ("MANUAL", "RECURRING"):
+            data = cmk("list", "snapshots",
+                       f"zoneid={zone_id}",
+                       "filter=id,volumename,state",
+                       f"snapshottype={snap_type}",
+                       "tags[0].key=locaweb-cloud-deploy-id",
+                       f"tags[0].value={network_name}")
+            if data:
+                all_snaps.extend(data.get("snapshot", []))
+        ready = [s for s in all_snaps
+                 if s.get("volumename") == vol_name
+                 and s.get("state") == "BackedUp"]
+        if ready:
+            print(f"    Snapshot found in {zone_name}: {ready[0]['id']}")
+            return True
+        time.sleep(30)
+    print(f"    Timed out waiting for snapshot in {zone_name}")
+    return False
+
+
 # ---------------------------------------------------------------------------
 # Workflow Triggering
 # ---------------------------------------------------------------------------
@@ -261,11 +375,11 @@ def trigger_deploy(inputs):
         return json.load(f)
 
 
-def trigger_teardown(env_name=DEFAULT_ENV_NAME):
+def trigger_teardown(env_name=DEFAULT_ENV_NAME, zone=None):
     """Trigger teardown.yml and wait for completion."""
     print("\n  --- Triggering teardown workflow ---")
     run_id = trigger_workflow("teardown.yml", {
-        "zone": ZONE,
+        "zone": zone or ZONE,
         "env_name": env_name,
     })
     wait_for_run(run_id)
@@ -608,6 +722,21 @@ class TestScenario:
             self.status = "FAIL"
         return passed
 
+    def assert_snapshot_policy(self, vol_id, network_name, label):
+        """Assert snapshot policy exists with correct tag and zone coverage.
+
+        Runs three assertions (exists, tag, zones) for the given volume.
+        """
+        sp = verify_snapshot_policy(vol_id, expected_network_name=network_name)
+        self.assert_true(sp["exists"],
+                         f"Snapshot policy exists on {label}")
+        self.assert_true(sp["tag_ok"],
+                         f"Snapshot policy tag correct on {label}"
+                         + (f" ({sp['details']})" if not sp["tag_ok"] and sp["details"] else ""))
+        self.assert_true(sp["zones_ok"],
+                         f"Snapshot policy covers all zones on {label}"
+                         f" (zones={sp['zone_names']})")
+
 
 # ---------------------------------------------------------------------------
 # E2E Test Runner
@@ -657,11 +786,13 @@ class E2ETestRunner:
             "web-only": [self._scenario_web_only],
             "scale-up": [self._scenario_scale_up],
             "scale-down": [self._scenario_scale_down],
+            "recovery": [self._scenario_recovery],
             "all": [
                 self._scenario_complete,
                 self._scenario_web_only,
                 self._scenario_scale_up,
                 self._scenario_scale_down,
+                self._scenario_recovery,
             ],
         }
 
@@ -809,6 +940,17 @@ class E2ETestRunner:
                     s.assert_equal(f2b["findtime"], 600,
                                    f"fail2ban findtime=600 on {label}")
 
+            # Snapshot policies: blob and db volumes should have policies
+            network_name = make_network_name(DEFAULT_ENV_NAME)
+            blob_vol_id = output.get("blob_volume_id", "")
+            db_vol_id = output.get("db_volume_id", "")
+            if blob_vol_id:
+                s.assert_snapshot_policy(blob_vol_id, network_name,
+                                        "blob volume")
+            if db_vol_id:
+                s.assert_snapshot_policy(db_vol_id, network_name,
+                                        "db volume")
+
             # Teardown
             trigger_teardown(DEFAULT_ENV_NAME)
 
@@ -925,6 +1067,13 @@ class E2ETestRunner:
             s.assert_equal(f2b["findtime"], 600,
                            "fail2ban findtime=600 on web")
 
+            # Snapshot policies: blob volume should have a policy
+            network_name = make_network_name(DEFAULT_ENV_NAME)
+            blob_vol_id = output.get("blob_volume_id", "")
+            if blob_vol_id:
+                s.assert_snapshot_policy(blob_vol_id, network_name,
+                                        "blob volume")
+
             # Teardown
             trigger_teardown(DEFAULT_ENV_NAME)
 
@@ -1007,6 +1156,17 @@ class E2ETestRunner:
                 mc = self.ssh.get_pg_setting(db_ip, db_container, "max_connections")
                 s.assert_equal(mc, "100",
                                "PG max_connections is 100 (small plan)")
+
+            # Snapshot policies: blob and db volumes should have policies
+            network_name = make_network_name("e2etest")
+            blob_vol_id = output.get("blob_volume_id", "")
+            db_vol_id = output.get("db_volume_id", "")
+            if blob_vol_id:
+                s.assert_snapshot_policy(blob_vol_id, network_name,
+                                        "blob volume (initial)")
+            if db_vol_id:
+                s.assert_snapshot_policy(db_vol_id, network_name,
+                                        "db volume (initial)")
 
             # Verify the single worker has env vars
             if worker_ips:
@@ -1155,6 +1315,17 @@ class E2ETestRunner:
             s.assert_equal(len(worker_ips), 3,
                            "Initial deploy has 3 workers")
 
+            # Snapshot policies: blob and db volumes should have policies
+            network_name = make_network_name(DEFAULT_ENV_NAME)
+            blob_vol_id = output.get("blob_volume_id", "")
+            db_vol_id = output.get("db_volume_id", "")
+            if blob_vol_id:
+                s.assert_snapshot_policy(blob_vol_id, network_name,
+                                        "blob volume (initial)")
+            if db_vol_id:
+                s.assert_snapshot_policy(db_vol_id, network_name,
+                                        "db volume (initial)")
+
             # Verify initial
             http = HTTPVerifier(web_ip)
             s.assert_true(
@@ -1206,6 +1377,169 @@ class E2ETestRunner:
 
         self.scenarios.append(s)
 
+    # ------------------------------------------------------------------
+    # Scenario: Disaster Recovery (deploy -> snapshot -> recover to ZP02)
+    # ------------------------------------------------------------------
+
+    def _scenario_recovery(self):
+        s = TestScenario("Disaster Recovery (cross-zone)")
+        with s:
+            network_name = make_network_name(DEFAULT_ENV_NAME)
+
+            # 1. Deploy to ZP01 with web + db (no workers)
+            output = trigger_deploy({
+                "zone": "ZP01",
+                "env_name": DEFAULT_ENV_NAME,
+                "db_enabled": "true",
+            })
+
+            web_ip = output.get("web_ip", "")
+            db_ip = output.get("db_ip", "")
+            s.assert_true(web_ip, "Deploy produced web_ip")
+            s.assert_true(db_ip, "Deploy produced db_ip")
+
+            if not web_ip:
+                self.scenarios.append(s)
+                return
+
+            # 2. Assert snapshot policies exist on blob and db volumes
+            blob_vol_id = output.get("blob_volume_id", "")
+            db_vol_id = output.get("db_volume_id", "")
+            if blob_vol_id:
+                s.assert_snapshot_policy(blob_vol_id, network_name,
+                                        "blob volume")
+            if db_vol_id:
+                s.assert_snapshot_policy(db_vol_id, network_name,
+                                        "db volume")
+
+            # 3. Wait for healthy + insert sample data
+            http = HTTPVerifier(web_ip)
+            s.assert_true(
+                http.wait_for_healthy("/up", timeout=300),
+                "HTTP /up returns 200 (original deploy)")
+
+            test_note = f"e2e-recovery-note-{int(time.time())}"
+            status, _ = http.post_form("/notes", {"content": test_note})
+            s.assert_true(status in (200, 302),
+                          f"POST /notes returns 200 or 302 (got {status})")
+
+            test_filename = f"e2e-recovery-{int(time.time())}.txt"
+            status, _ = http.post_multipart(
+                "/upload", test_filename, "recovery test content")
+            s.assert_true(status in (200, 302),
+                          f"POST /upload returns 200 or 302 (got {status})")
+
+            # 4. Verify data visible
+            status, body = http.get("/")
+            s.assert_equal(status, 200, "HTTP GET / returns 200")
+            s.assert_contains(body, test_note,
+                              "Test note visible on original deploy")
+            s.assert_contains(body, test_filename,
+                              "Uploaded file visible on original deploy")
+
+            # 5. Create manual snapshots with locaweb-cloud-deploy-id tag
+            # No CHECKPOINT — Postgres is crash-safe by design, and skipping
+            # it reproduces stricter real-world disaster conditions.
+            blob_snap_id = None
+            db_snap_id = None
+            if blob_vol_id:
+                blob_snap_id = create_tagged_snapshot(blob_vol_id, network_name)
+                s.assert_true(blob_snap_id,
+                              "Manual blob snapshot created")
+            if db_vol_id:
+                db_snap_id = create_tagged_snapshot(db_vol_id, network_name)
+                s.assert_true(db_snap_id,
+                              "Manual db snapshot created")
+
+            # 6. Wait for snapshots in both ZP01 and ZP02
+            blob_name = f"{network_name}-blob"
+            dbdata_name = f"{network_name}-dbdata"
+
+            s.assert_true(
+                wait_for_snapshot_in_zone(blob_name, network_name, "ZP01",
+                                         timeout=600),
+                "Blob snapshot ready in ZP01")
+            s.assert_true(
+                wait_for_snapshot_in_zone(dbdata_name, network_name, "ZP01",
+                                         timeout=600),
+                "DB snapshot ready in ZP01")
+            s.assert_true(
+                wait_for_snapshot_in_zone(blob_name, network_name, "ZP02",
+                                         timeout=600),
+                "Blob snapshot replicated to ZP02")
+            s.assert_true(
+                wait_for_snapshot_in_zone(dbdata_name, network_name, "ZP02",
+                                         timeout=600),
+                "DB snapshot replicated to ZP02")
+
+            # 7. Try recovery to ZP01 (same zone) — expect failure
+            print("\n  --- Attempting recovery to ZP01 (should fail) ---")
+            same_zone_failed = False
+            try:
+                trigger_deploy({
+                    "zone": "ZP01",
+                    "env_name": DEFAULT_ENV_NAME,
+                    "db_enabled": "true",
+                    "recover": "true",
+                })
+            except RuntimeError:
+                same_zone_failed = True
+            s.assert_true(same_zone_failed,
+                          "Recovery to same zone (ZP01) correctly rejected")
+
+            # 8. Recover to ZP02
+            print("\n  --- Recovering to ZP02 ---")
+            output_r = trigger_deploy({
+                "zone": "ZP02",
+                "env_name": DEFAULT_ENV_NAME,
+                "db_enabled": "true",
+                "recover": "true",
+            })
+
+            web_ip_r = output_r.get("web_ip", "")
+            db_ip_r = output_r.get("db_ip", "")
+            s.assert_true(web_ip_r, "Recovery produced web_ip")
+            s.assert_true(db_ip_r, "Recovery produced db_ip")
+
+            if not web_ip_r:
+                # Teardown both zones before returning
+                trigger_teardown(DEFAULT_ENV_NAME, zone="ZP02")
+                trigger_teardown(DEFAULT_ENV_NAME, zone="ZP01")
+                self.scenarios.append(s)
+                return
+
+            # 9. Assert recovered app works
+            http_r = HTTPVerifier(web_ip_r)
+            s.assert_true(
+                http_r.wait_for_healthy("/up", timeout=300),
+                "HTTP /up returns 200 (recovered app)")
+
+            status, body_r = http_r.get("/")
+            s.assert_equal(status, 200,
+                           "HTTP GET / returns 200 (recovered app)")
+
+            # 10. Assert sample data survived recovery
+            s.assert_contains(body_r, test_note,
+                              "Test note survived recovery")
+            s.assert_contains(body_r, test_filename,
+                              "Uploaded file survived recovery")
+
+            # 11. Assert recovered app has snapshot policies
+            blob_vol_id_r = output_r.get("blob_volume_id", "")
+            db_vol_id_r = output_r.get("db_volume_id", "")
+            if blob_vol_id_r:
+                s.assert_snapshot_policy(blob_vol_id_r, network_name,
+                                        "recovered blob volume")
+            if db_vol_id_r:
+                s.assert_snapshot_policy(db_vol_id_r, network_name,
+                                        "recovered db volume")
+
+            # 12. Teardown ZP02 first (recovered), then ZP01 (original)
+            trigger_teardown(DEFAULT_ENV_NAME, zone="ZP02")
+            trigger_teardown(DEFAULT_ENV_NAME, zone="ZP01")
+
+        self.scenarios.append(s)
+
 
 # ---------------------------------------------------------------------------
 # Main
@@ -1219,6 +1553,7 @@ def main():
     print(f"# Scenario:   {SCENARIO}")
     print(f"# Network:    {make_network_name(DEFAULT_ENV_NAME)} (default)")
     print(f"#             {make_network_name('e2etest')} (scale-up)")
+    print(f"#             {make_network_name(DEFAULT_ENV_NAME)} @ ZP02 (recovery)")
     print(f"{'#' * 60}")
 
     runner = E2ETestRunner()
