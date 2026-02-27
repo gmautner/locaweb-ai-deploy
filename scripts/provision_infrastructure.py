@@ -168,10 +168,13 @@ def find_keypair(name):
     return bool(data and data.get("sshkeypair"))
 
 
-def find_vm(name):
+def find_vm(name, zone_id=None):
     """Find existing VM by name, return dict or None."""
-    data = cmk_quiet("list", "virtualmachines", f"name={name}",
-                     "filter=id,name,state,serviceofferingid")
+    cmd = ["list", "virtualmachines", f"name={name}",
+           "filter=id,name,state,serviceofferingid"]
+    if zone_id:
+        cmd.append(f"zoneid={zone_id}")
+    data = cmk_quiet(*cmd)
     if data:
         for vm in data.get("virtualmachine", []):
             if vm["name"] == name:
@@ -247,13 +250,13 @@ def deploy_vm(name, offering_id, template_id, zone_id, net_id, keypair_name,
     If userdata_path is provided and the file exists, the script is
     base64-encoded and passed as cloud-init userdata during deployment.
     """
-    vm = find_vm(name)
+    vm = find_vm(name, zone_id=zone_id)
     if vm:
         vm_id = vm["id"]
         current_offering = vm.get("serviceofferingid", "")
         if current_offering and current_offering != offering_id:
             print(f"  Offering changed: {name} ({vm_id})")
-            scale_vm(vm_id, name, offering_id)
+            scale_vm(vm_id, name, offering_id, zone_id=zone_id)
             return vm_id, True
         else:
             print(f"  Already exists: {name} ({vm_id})")
@@ -278,7 +281,7 @@ def deploy_vm(name, offering_id, template_id, zone_id, net_id, keypair_name,
     return vm_id, False
 
 
-def scale_vm(vm_id, name, new_offering_id):
+def scale_vm(vm_id, name, new_offering_id, zone_id=None):
     """Scale a VM to a new service offering (in-place).
 
     Stops the VM first, scales, then starts it again.  Hot (live) scaling
@@ -288,7 +291,7 @@ def scale_vm(vm_id, name, new_offering_id):
     print(f"  Stopping VM for offline scale...")
     cmk("stop", "virtualmachine", f"id={vm_id}")
     for _ in range(30):  # wait up to ~150s
-        vm = find_vm(name)
+        vm = find_vm(name, zone_id=zone_id)
         if vm and vm.get("state") == "Stopped":
             break
         time.sleep(5)
@@ -650,7 +653,7 @@ def provision(config, repo_name, unique_id, env_name, public_key, recover=False)
     removed = 0
     while True:
         worker_name = f"{network_name}-worker-{excess_idx}"
-        vm = find_vm(worker_name)
+        vm = find_vm(worker_name, zone_id=zone_id)
         if not vm:
             break
         print(f"  Removing: {worker_name}")
