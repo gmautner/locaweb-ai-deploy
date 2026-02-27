@@ -85,6 +85,8 @@ jobs:
           echo "SSH key prepared."
 
       - name: Initial teardown
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           python3 -u scripts/teardown_infrastructure.py \
             --network-name "${{ github.event.repository.name }}-${{ github.repository_id }}-preview" || true
@@ -93,6 +95,13 @@ jobs:
           # Also clean up ZP02 in case a previous recovery scenario left resources
           python3 -u scripts/teardown_infrastructure.py \
             --network-name "${{ github.event.repository.name }}-${{ github.repository_id }}-preview" --zone ZP02 || true
+          # Delete stale deploy workflow infrastructure caches so fresh provisions run
+          echo "Cleaning deploy infrastructure caches..."
+          gh cache list -R "${{ github.repository }}" --json key -q '.[].key' \
+            | grep '^infra-' | while read -r key; do
+              echo "  Deleting cache: $key"
+              gh cache delete "$key" -R "${{ github.repository }}" || true
+            done
 
       - name: Run E2E tests
         env:
